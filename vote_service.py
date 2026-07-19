@@ -1260,6 +1260,30 @@ QKEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 QUESTION_TYPES = ("yesno", "ranked", "multi", "text")
 
 
+def _validate_constraints(cons_in, where, errors):
+    cons = []
+    for i, con in enumerate(cons_in):
+        if not isinstance(con, dict):
+            errors.append(f"{where}: constraints[{i}] must be an object")
+            continue
+        tag = str(con.get("tag") or "").strip().lower().replace(" ", "_")
+        label = str(con.get("label") or "").strip()
+        kind = "max" if "max" in con else "min" if "min" in con else None
+        try:
+            bound = int(con.get(kind)) if kind else -1
+        except (TypeError, ValueError):
+            bound = -1
+        if not tag or kind is None or bound < 0:
+            errors.append(f"{where}: constraints[{i}] needs tag and an "
+                          "integer min or max ≥ 0")
+            continue
+        nc = {"tag": tag, kind: bound}
+        if label:
+            nc["label"] = label
+        cons.append(nc)
+    return cons
+
+
 def _validate_questions(qs, errors, warnings):
     """Validate a generic questions list; returns the normalized list."""
     if not isinstance(qs, list) or not qs:
@@ -1318,12 +1342,12 @@ def _validate_questions(qs, errors, warnings):
                 else:
                     seen.add(cid)
                     opt = {"id": cid, "name": cname, "sub": sub}
-                    raw_tags = c.get("tags") if isinstance(c, dict) else None
-                    if raw_tags:
-                        tags = [str(t).strip().lower().replace(" ", "_")
-                                for t in raw_tags if str(t).strip()][:8]
-                        if tags:
-                            opt["tags"] = tags
+                    if isinstance(c, dict) and "tags" in c:
+                        # explicit tags key — even [] — means "attributes were
+                        # collected; none of the tagged categories apply"
+                        opt["tags"] = [str(t).strip().lower().replace(" ", "_")
+                                       for t in (c.get("tags") or [])
+                                       if str(t).strip()][:8]
                     opts.append(opt)
             if not opts:
                 errors.append(f"question {key!r}: needs at least one option")
@@ -1344,38 +1368,31 @@ def _validate_questions(qs, errors, warnings):
             # quota constraints for leadership elections (NPC-style: e.g.
             # max 13 cis_man; min 8 marginalized) — chapters set their own
             cons_in = q.get("constraints") or []
+            if q.get("quota_group"):
+                nq["quota_group"] = str(q["quota_group"]).strip().lower()
             if cons_in:
-                cons, all_tags = [], set()
-                for o in nq["options"]:
-                    all_tags |= set(o.get("tags") or [])
-                for i, con in enumerate(cons_in):
-                    if not isinstance(con, dict):
-                        errors.append(f"question {key!r}: constraints[{i}] must be an object")
-                        continue
-                    tag = str(con.get("tag") or "").strip().lower().replace(" ", "_")
-                    label = str(con.get("label") or "").strip()
-                    kind = "max" if "max" in con else "min" if "min" in con else None
-                    try:
-                        bound = int(con.get(kind)) if kind else -1
-                    except (TypeError, ValueError):
-                        bound = -1
-                    if not tag or kind is None or bound < 0:
-                        errors.append(f"question {key!r}: constraints[{i}] needs tag "
-                                      "and an integer min or max ≥ 0")
-                        continue
-                    if tag not in all_tags:
-                        warnings.append(f"question {key!r}: constraint tag {tag!r} "
-                                        "matches no candidate tags")
-                    nc = {"tag": tag, kind: bound}
-                    if label:
-                        nc["label"] = label
-                    cons.append(nc)
+                cons = _validate_constraints(cons_in, f"question {key!r}", errors)
                 mins = sum(c["min"] for c in cons if "min" in c)
                 if mins > nq["seats"]:
                     errors.append(f"question {key!r}: constraint minimums ({mins}) "
                                   f"exceed the {nq['seats']} seats")
                 if cons:
                     nq["constraints"] = cons
+            if cons_in or nq.get("quota_group"):
+                # quotas require COLLECTED attributes: every candidate needs an
+                # explicit tags list (empty = collected, none apply)
+                missing = [o["id"] for o in nq["options"] if "tags" not in o]
+                if missing:
+                    errors.append(f"question {key!r}: quota requirements need "
+                                  "collected attributes — add a tags list (may "
+                                  f"be []) for: {', '.join(missing)}")
+                all_tags = set()
+                for o in nq["options"]:
+                    all_tags |= set(o.get("tags") or [])
+                for con in (nq.get("constraints") or []):
+                    if con["tag"] not in all_tags:
+                        warnings.append(f"question {key!r}: constraint tag "
+                                        f"{con['tag']!r} matches no candidate tags")
             nq["secret"] = bool(q.get("secret")) or bool(q.get("delegate"))
             nq["delegate"] = bool(q.get("delegate"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
@@ -1490,6 +1507,33 @@ def validate_poll_config(poll_id: str, body: dict):
                          "real_delegates": real_delegates,
                          "real_alternates": real_alternates, "candidates": cands}}
 
+    # FULL-BODY quota groups: constraints spanning several contests (e.g.
+    # co-chairs + at-large all count toward one requirement)
+    qgroups = {}
+    if isinstance(body.get("quota_groups"), dict):
+        for gname, cons_list in body["quota_groups"].items():
+            g = str(gname).strip().lower()
+            gcons = _validate_constraints(cons_list or [], f"quota_groups[{g!r}]", errors)
+            if gcons:
+                qgroups[g] = gcons
+    if questions is not None:
+        for q in questions:
+            gg = q.get("quota_group")
+            if gg and gg not in qgroups:
+                errors.append(f"question {q.get('key')!r}: quota_group {gg!r} "
+                              "is not defined in quota_groups")
+        for g, gcons in qgroups.items():
+            members = [q for q in questions
+                       if q.get("quota_group") == g and q.get("type") == "ranked"]
+            if not members:
+                warnings.append(f"quota_groups[{g!r}] has no ranked member questions")
+                continue
+            total_seats = sum(int(q.get("seats", 1)) for q in members)
+            mins = sum(c["min"] for c in gcons if "min" in c)
+            if mins > total_seats:
+                errors.append(f"quota_groups[{g!r}]: minimums ({mins}) exceed "
+                              f"the group's {total_seats} total seats")
+
     conv_raw = str(body.get("convention_date") or "").strip()
     apportioned = bool(body.get("apportionment_done"))
     if conv_raw:
@@ -1524,6 +1568,8 @@ def validate_poll_config(poll_id: str, body: dict):
         "test_code": test_code or None,
         "convention_date": conv_raw or None, "apportionment_done": apportioned,
     }
+    if qgroups:
+        cfg["quota_groups"] = qgroups
     if questions is not None:
         cfg["questions"] = questions
     else:
@@ -1786,7 +1832,10 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
     weighted = any(w != 1 for _, w in main_rows) or any(w != 1 for _, w in secret_rows)
 
     out = []
-    for q in poll_questions(cfg):
+    qgroups = cfg.get("quota_groups") or {}
+    group_elected = {g: {} for g in qgroups}   # body-wide per-tag winners so far
+    all_questions = poll_questions(cfg)
+    for q in all_questions:
         key, typ = q["key"], q["type"]
         entry = {"key": key, "type": typ, "title": q["title"],
                  "secret": bool(q.get("secret"))}
@@ -1806,10 +1855,33 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
             options = q["options"]
             seats = int(q.get("seats", 1))
             cons = q.get("constraints") or None
+            group = q.get("quota_group")
+            gpre, glater_seats, glater_supply = None, 0, None
+            if group and group in qgroups:
+                cons = qgroups[group]
+                gpre = dict(group_elected[group])
+                seen_self, supply = False, {}
+                for m in all_questions:
+                    if m.get("quota_group") != group or m["type"] != "ranked":
+                        continue
+                    if m["key"] == key:
+                        seen_self = True
+                        continue
+                    if not seen_self:
+                        continue
+                    glater_seats += int(m.get("seats", 1))
+                    for o in m["options"]:
+                        for t in (o.get("tags") or []):
+                            supply[t] = supply.get(t, 0) + 1
+                glater_supply = supply or None
+                entry["quota_group"] = group
+                entry["group_partial"] = glater_seats > 0   # body not complete yet
             ctags = {i + 1: o["tags"] for i, o in enumerate(options)
                      if o.get("tags")} or None
             res = stv_tabulate.count(_blt_text(rows, key, options, seats),
-                                     constraints=cons, cand_tags=ctags)
+                                     constraints=cons, cand_tags=ctags,
+                                     pre_elected=gpre, later_seats=glater_seats,
+                                     later_supply=glater_supply)
             entry.update(seats=seats, valid_ballots=res["valid_ballots"],
                          quota=res["quota"], winners=res["winners"],
                          first_prefs=res["stages"][0]["totals"],
@@ -1819,9 +1891,26 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
             alts = int(q.get("alternates", 0))
             if alts:
                 recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts),
-                                             constraints=cons, cand_tags=ctags)
+                                             constraints=cons, cand_tags=ctags,
+                                             pre_elected=gpre, later_seats=glater_seats,
+                                             later_supply=glater_supply)
                 entry["alternates"] = [w for w in recount["winners"]
                                        if w not in res["winners"]]
+            if cons:
+                # the admin-facing comparison: same ballots, quotas off
+                res_u = stv_tabulate.count(_blt_text(rows, key, options, seats))
+                entry["unconstrained"] = {"winners": res_u["winners"],
+                                          "quota": res_u["quota"],
+                                          "stages": res_u["stages"]}
+                if alts:
+                    ru = stv_tabulate.count(_blt_text(rows, key, options, seats + alts))
+                    entry["unconstrained"]["alternates"] = [
+                        w for w in ru["winners"] if w not in res_u["winners"]]
+            if group and group in qgroups:
+                name_tags = {o["name"]: (o.get("tags") or []) for o in options}
+                for w in res["winners"]:
+                    for t in name_tags.get(w, []):
+                        group_elected[group][t] = group_elected[group].get(t, 0) + 1
         elif typ == "multi":
             counts = {o["id"]: 0 for o in q["options"]}
             for a, w in main_rows:
@@ -1981,6 +2070,20 @@ def _results_txt(res: dict) -> str:
             out.append(f"  WINNERS: {', '.join(q['winners'])}")
             if q.get("alternates"):
                 out.append(f"  ALTERNATES (two-count recount): {', '.join(q['alternates'])}")
+            if q.get("quota_group"):
+                out.append(f"  QUOTA GROUP: {q['quota_group']} (requirements span "
+                           "every contest in the group; tallies are body-wide)")
+            for cn in (q.get("constraints") or []):
+                bound = f"max {cn['max']}" if "max" in cn else f"min {cn['min']}"
+                okc = (cn["elected"] <= cn["max"]) if "max" in cn else (cn["elected"] >= cn["min"])
+                out.append(f"  QUOTA: {cn.get('label') or bound + ' ' + cn['tag']} — "
+                           f"{cn['elected']} elected [{'OK' if okc else 'VIOLATED'}]")
+            if q.get("unconstrained"):
+                u = q["unconstrained"]
+                out.append(f"  WITHOUT quota requirements the winners would have been: "
+                           f"{', '.join(u['winners'])}")
+                if u.get("alternates"):
+                    out.append(f"  ...and the alternates: {', '.join(u['alternates'])}")
         elif q["type"] == "multi":
             for name, v in q["counts"].items():
                 out.append(f"      {name:<40} {v:>8}")

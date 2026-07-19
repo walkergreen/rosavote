@@ -228,6 +228,12 @@
         <textarea id="b-questions" style="min-height:220px" placeholder='[
   {"key": "measure_1", "type": "yesno", "title": "Shall the chapter…?"}
 ]'></textarea>
+        <label>Quota groups JSON (optional — full-body requirements across contests)</label>
+        <textarea id="b-qgroups" style="min-height:60px" placeholder='{"body": [{"tag":"cis_man","max":13,"label":"No more than 13 cis men"},{"tag":"marginalized","min":8}]}'></textarea>
+        <p style="font-size:.78rem;margin:6px 0 0">Give a question <code>"quota_group":"body"</code>
+        to count its seats toward the group requirement (e.g. co-chairs + at-large together).
+        Candidates in quota contests must carry a <code>tags</code> list (may be empty =
+        attributes collected, none apply).</p>
         <p style="font-size:.78rem;margin:6px 0 0">Types: <code>yesno</code> ·
         <code>ranked</code> (options, seats, alternates; <code>secret</code> hides identity;
         <code>delegate</code> additionally enforces Art. V) · <code>multi</code> ·
@@ -541,7 +547,7 @@ function renderResultsOverview(){
 $("refresh-btn").onclick = loadPolls;
 $("new-election-btn").onclick = function(){
   document.querySelector('[data-pane="builder-pane"]').click();
-  ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions"].forEach(function(id){ $(id).value=""; });
+  ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions","b-qgroups"].forEach(function(id){ $(id).value=""; });
   $("b-tz").value = "America/New_York"; $("b-app").checked = false;
   editingLegacy = null; msg("b-msg","","");
   syncArt5();
@@ -567,6 +573,7 @@ function fillBuilder(pid, c){
   $("b-conv").value = c.convention_date || ""; $("b-app").checked = !!c.apportionment_done;
   $("b-test").value = c.test_code || "";
   $("b-questions").value = c.questions ? JSON.stringify(c.questions, null, 2) : "";
+  $("b-qgroups").value = c.quota_groups ? JSON.stringify(c.quota_groups, null, 2) : "";
   editingLegacy = c.questions ? null : {q6: c.q6, q8: c.q8, q7: c.q7};
   msg("b-msg","","");
   syncArt5();
@@ -623,6 +630,11 @@ $("b-save").onclick = function(){
   if(qtxt){
     try { body.questions = JSON.parse(qtxt); }
     catch(e){ msg("b-msg","err","Questions JSON doesn't parse: "+e.message); return; }
+  }
+  var gtxt = $("b-qgroups").value.trim();
+  if(gtxt){
+    try { body.quota_groups = JSON.parse(gtxt); }
+    catch(e){ msg("b-msg","err","Quota groups JSON doesn't parse: "+e.message); return; }
   } else if(editingLegacy && editingLegacy.q7){
     body.q6 = editingLegacy.q6; body.q8 = editingLegacy.q8; body.q7 = editingLegacy.q7;
   } else {
@@ -780,17 +792,14 @@ function loadResults(live){
           barChart([["Yes", q.counts.YES, "f-elected"], ["No", q.counts.NO, "f-cont"],
                     ["Abstain", q.counts.ABSTAIN, "f-muted"]]);
       } else if(q.type==="ranked"){
-        html += "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
-        if(q.alternates) html += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
-        if(q.constraints && q.constraints.length){
-          html += "<br/><b>Quota requirements:</b> " + q.constraints.map(function(cn){
-            var bound = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
-            var okc = ("max" in cn) ? (cn.elected <= cn.max) : (cn.elected >= cn.min);
-            return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc ? "✓" : "✗ VIOLATED");
-          }).join(" · ");
+        html += "<div id='cv-"+q.key+"'>"+rankedBlock(q)+"</div>";
+        if(q.unconstrained){
+          var uq = {key:q.key+"_u", seats:q.seats, winners:q.unconstrained.winners,
+                    alternates:q.unconstrained.alternates, valid_ballots:q.valid_ballots,
+                    quota:q.unconstrained.quota||q.quota, stages:q.unconstrained.stages};
+          html += "<div id='uv-"+q.key+"' style='display:none'><p class='kicker'>Comparison — quota requirements NOT applied (not the official result)</p>"+rankedBlock(uq)+"</div>";
+          html += "<button class='btn ghost sm' onclick=\"toggleQuota('"+q.key+"')\" id='tq-"+q.key+"'>Compare: without quota requirements</button>";
         }
-        html += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
-        html += stvChart(q);
       } else if(q.type==="multi"){
         html += barChart(Object.keys(q.counts).map(function(n){ return [n, q.counts[n], "f-cont"]; }));
       } else if(q.type==="text"){
@@ -801,6 +810,30 @@ function loadResults(live){
     $("results-view").innerHTML = html;
   });
 }
+function rankedBlock(q){
+  var h = "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
+  if(q.alternates) h += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
+  if(q.quota_group) h += "<br/><b>Quota group:</b> "+esc(q.quota_group)+" <small>(requirements span every contest in the group; tallies are body-wide)</small>";
+  if(q.constraints && q.constraints.length){
+    h += "<br/><b>Quota requirements:</b> " + q.constraints.map(function(cn){
+      var bound = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+      var okc = ("max" in cn) ? (cn.elected <= cn.max) : (cn.elected >= cn.min);
+      if(q.group_partial) return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+
+        " elected so far <small>(final compliance settles in the group's last contest)</small>";
+      return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc ? "✓" : "✗ VIOLATED");
+    }).join(" · ");
+  }
+  h += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
+  h += stvChart(q);
+  return h;
+}
+window.toggleQuota = function(k){
+  var cv = $("cv-"+k), uv = $("uv-"+k), b = $("tq-"+k);
+  var showU = uv.style.display === "none";
+  uv.style.display = showU ? "" : "none";
+  cv.style.display = showU ? "none" : "";
+  b.textContent = showU ? "Back to the official result (quotas applied)" : "Compare: without quota requirements";
+};
 function barChart(rows){
   // horizontal bars, direct value labels, tooltips on hover
   var max = Math.max(1, Math.max.apply(null, rows.map(function(r){ return r[1]; })));
@@ -871,6 +904,7 @@ function cfgBody(pid, overrides){
   var body = {name: c.name, timezone: c.timezone || "America/New_York",
     test_code: c.test_code || "", opens_at: c.opens_at || null, closes_at: c.closes_at || null,
     convention_date: c.convention_date || null, apportionment_done: !!c.apportionment_done};
+  if(c.quota_groups) body.quota_groups = c.quota_groups;
   if(c.questions) body.questions = c.questions;
   else { body.q6 = c.q6; body.q8 = c.q8; body.q7 = c.q7; }
   return Object.assign(body, overrides || {});

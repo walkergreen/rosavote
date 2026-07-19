@@ -71,7 +71,8 @@ def fmt(v: int) -> str:
     return f"{v / SCALE:.5f}".rstrip("0").rstrip(".")
 
 
-def count(blt_text: str, constraints=None, cand_tags=None):
+def count(blt_text: str, constraints=None, cand_tags=None,
+          pre_elected=None, later_seats=0, later_supply=None):
     """Scottish STV, optionally CONSTRAINED for leadership diversity quotas.
 
     constraints: [{"tag": str, "max": int, "label": str?} |
@@ -87,10 +88,21 @@ def count(blt_text: str, constraints=None, cand_tags=None):
         remaining member of a group is needed to reach that group's minimum
         (or every non-member is needed to stay under a maximum).
     Each constraint is checked independently; with heavily overlapping
-    tags, review the stage log."""
+    tags, review the stage log.
+
+    FULL-BODY quotas spanning several contests (e.g. co-chairs + at-large
+    seats counted toward one requirement) chain via:
+      pre_elected:  {tag: n} — winners already elected in earlier contests
+      later_seats:  seats still to be filled by later contests in the group
+      later_supply: {tag: n} — tagged candidates available in those contests
+    Feasibility then reasons about the whole body, so a minimum isn't
+    force-fed into an early small contest that later contests can satisfy."""
     n_cands, seats, withdrawn, raw_ballots, names, title = parse_blt(blt_text)
     constraints = constraints or []
     cand_tags = {int(k): set(v) for k, v in (cand_tags or {}).items()}
+    pre = {k: int(v) for k, v in (pre_elected or {}).items()}
+    later_supply = {k: int(v) for k, v in (later_supply or {}).items()}
+    later_seats = int(later_seats or 0)
 
     def has(c, tag):
         return tag in cand_tags.get(c, ())
@@ -129,11 +141,12 @@ def count(blt_text: str, constraints=None, cand_tags=None):
         history.append(dict(totals))
 
     def elected_count(tag):
-        return sum(1 for c in elected_order if has(c, tag))
+        return pre.get(tag, 0) + sum(1 for c in elected_order if has(c, tag))
 
     def can_elect(c):
-        """Would electing c still allow a constraint-satisfying result?"""
-        s_rem = seats - len(elected_order) - 1     # seats left AFTER electing c
+        """Would electing c still allow a constraint-satisfying BODY?
+        Seats/supply in later group contests count toward feasibility."""
+        s_rem = seats - len(elected_order) - 1 + later_seats
         for con in constraints:
             t = con["tag"]
             if "max" in con and has(c, t) and elected_count(t) + 1 > con["max"]:
@@ -142,7 +155,8 @@ def count(blt_text: str, constraints=None, cand_tags=None):
                 e = elected_count(t) + (1 if has(c, t) else 0)
                 need = max(0, con["min"] - e)
                 supply = sum(1 for x in totals
-                             if state[x] == "continuing" and x != c and has(x, t))
+                             if state[x] == "continuing" and x != c and has(x, t)) \
+                    + later_supply.get(t, 0)
                 if need > s_rem or need > supply:
                     return False
         return True
@@ -154,7 +168,10 @@ def count(blt_text: str, constraints=None, cand_tags=None):
         for con in constraints:
             t = con["tag"]
             if "min" in con:
-                need = max(0, con["min"] - elected_count(t))
+                # later contests can cover part of the need; guard local
+                # members only for the residue they alone can supply
+                later_cap = min(later_supply.get(t, 0), later_seats)
+                need = max(0, con["min"] - elected_count(t) - later_cap)
                 members = [x for x in continuing if has(x, t)]
                 if need > 0 and need >= len(members):
                     g |= set(members)
@@ -282,7 +299,7 @@ def count(blt_text: str, constraints=None, cand_tags=None):
         "stages": stages,
     }
     if constraints:
-        out["constraints"] = [dict(con, elected=sum(
+        out["constraints"] = [dict(con, elected=pre.get(con["tag"], 0) + sum(
             1 for c in elected_order[:seats] if has(c, con["tag"]))) for con in constraints]
     return out
 

@@ -631,4 +631,52 @@ r = c.post("/admin/api/count_blt", headers=hdr, json={
 ok(r.status_code == 200 and sum(1 for w in r.get_json()["winners"] if w in ("X", "Y")) <= 1,
    "workbench honors quota constraints")
 
+# ---- full-body quota groups + unconstrained comparison + tags required ----
+BODY_QS = [
+    {"key": "cochair", "type": "ranked", "title": "Elect 1 co-chair", "seats": 1,
+     "quota_group": "body",
+     "options": [{"id": "P1", "name": "P", "tags": []},
+                 {"id": "Q2", "name": "Q", "tags": ["marginalized"]}]},
+    {"key": "atlarge", "type": "ranked", "title": "Elect 2 at-large", "seats": 2,
+     "quota_group": "body",
+     "options": [{"id": "R1", "name": "R", "tags": []},
+                 {"id": "S2", "name": "S", "tags": ["marginalized"]},
+                 {"id": "T3", "name": "T", "tags": ["marginalized"]}]},
+]
+r = c.post("/admin/api/polls/body_quota_test", headers=hdr, json={
+    "name": "Body Quota Test",
+    "quota_groups": {"body": [{"tag": "marginalized", "min": 2,
+                               "label": "At least 2 marginalized members on the body"}]},
+    "questions": BODY_QS})
+ok(r.status_code == 200, "full-body quota group saves")
+ok(c.post("/admin/api/polls/body_quota_test", headers=hdr, json={
+    "name": "x", "quota_groups": {"body": [{"tag": "m", "min": 1}]},
+    "questions": [dict(BODY_QS[0],
+        options=[{"id": "P1", "name": "P"}, {"id": "Q2", "name": "Q", "tags": ["m"]}])]}
+    ).status_code == 400, "quota contests demand collected attributes (tags key) per candidate")
+
+for i, (qk, ranking) in enumerate([("cochair", ["P1"])] * 4 + [("cochair", ["Q2"])] * 2
+                                  + [("atlarge", ["R1"])] * 4 + [("atlarge", ["S2"])] * 3
+                                  + [("atlarge", ["T3"])]):
+    cc = f"BODY{i:02d}__PADPADPAD"
+    ans = {"cochair": ["ABSTAIN"], "atlarge": ["ABSTAIN"]}
+    ans[qk] = ranking
+    ok(c.post("/p/body_quota_test/vote", json={"code": cc, "answers": ans}).status_code == 200,
+       f"body vote {i}")
+r = c.get("/admin/api/polls/body_quota_test/results?live=1", headers=hdr)
+bq = {q["key"]: q for q in r.get_json()["questions"]}
+ok(bq["cochair"]["winners"] == ["P"] and bq["cochair"]["quota_group"] == "body",
+   "group: early small contest not force-fed the minimum (later seats cover it)")
+marg_body = sum(1 for w in bq["cochair"]["winners"] + bq["atlarge"]["winners"]
+                if w in ("Q", "S", "T"))
+ok(marg_body >= 2, "group minimum satisfied across the full body")
+ok(bq["atlarge"]["constraints"][0]["elected"] == marg_body,
+   "group constraint tallies are body-wide")
+ok("unconstrained" in bq["atlarge"] and bq["atlarge"]["unconstrained"]["winners"],
+   "results carry the unconstrained comparison for the toggle")
+r = c.get("/admin/api/polls/body_quota_test/export.zip?live=1", headers=hdr)
+ok("WITHOUT quota requirements" in
+   _zipfile.ZipFile(_io.BytesIO(r.data)).read("results.txt").decode(),
+   "results.txt exports both outcomes")
+
 print(f"SMOKE TEST: all {passed} checks passed")

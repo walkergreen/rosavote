@@ -115,6 +115,13 @@ Ranked questions may carry QUOTA CONSTRAINTS (leadership elections):
 `stv_tabulate.count(constraints=, cand_tags=)` runs the guarded/doomed
 constrained count; results echo per-constraint elected tallies; stage log
 names quota exclusions/guards. Any chapter can set its own via config.
+Quota contests REQUIRE a tags key on every candidate ([] = collected, none
+apply). FULL-BODY quotas: poll-level `quota_groups: {name: [constraints]}`
++ `quota_group: name` on member questions — contests count in document
+order with pre-elected carry-in and later-seat/supply feasibility
+(`pre_elected/later_seats/later_supply` params). Constrained results also
+carry `unconstrained` (winners/stages) — console toggle + results.txt show
+both outcomes.
 
 Windows: `timezone` (IANA, default America/New_York) — builder datetimes are
 poll-local; Art. V date math uses the poll tz. `finalized` polls reject votes
