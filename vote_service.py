@@ -34,6 +34,26 @@ from google.api_core import exceptions as gcloud_exc
 app = Flask(__name__)
 
 
+@app.after_request
+def _security_headers(resp):
+    # Defense-in-depth behind the admin-HTML sanitizer. connect-src 'self' is
+    # the load-bearing one: even if script somehow reached a page, it could
+    # not POST captured votes/codes to an off-origin server. Inline scripts
+    # are the app's own (templates); admin prose is sanitized of <script>.
+    resp.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    return resp
+
+
 class _LazyDB:
     """Defers firestore.Client() to first use so the module imports (and
     /healthz serves) without credentials — tools that only need the CHAPTERS
@@ -404,6 +424,74 @@ def window_state(cfg):
 def _esc(s) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+# ---- admin rich-text sanitizer -------------------------------------------
+# Question descriptions (and other admin-authored prose) may use light
+# formatting, so they are rendered as HTML rather than escaped. A national
+# admin token is the only way to save them — but a stolen/misused token must
+# not be able to plant <script>, event handlers, or javascript: URLs on a
+# ballot page. Everything not on this allowlist is escaped to text.
+import html.parser as _htmlparser
+
+_ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "br", "p", "ul", "ol", "li",
+                 "a", "small", "sub", "sup", "span", "code"}
+_VOID_TAGS = {"br"}
+_ALLOWED_ATTRS = {"a": {"href", "title"}, "span": set(), "code": set()}
+_SAFE_URL = re.compile(r"^(https?:|mailto:|/|#)", re.I)
+
+
+class _Sanitizer(_htmlparser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+        self.stack = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag not in _ALLOWED_TAGS:
+            return
+        allowed = _ALLOWED_ATTRS.get(tag, set())
+        kept = []
+        for k, v in attrs:
+            k = (k or "").lower()
+            if k not in allowed:
+                continue
+            if k == "href" and not _SAFE_URL.match((v or "").strip()):
+                continue
+            kept.append(f' {k}="{_esc(v)}"')
+        rel = ' rel="noopener nofollow"' if tag == "a" else ""
+        if tag in _VOID_TAGS:
+            self.out.append(f"<{tag}{''.join(kept)}/>")
+        else:
+            self.stack.append(tag)
+            self.out.append(f"<{tag}{''.join(kept)}{rel}>")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag not in _ALLOWED_TAGS or tag in _VOID_TAGS:
+            return
+        if tag in self.stack:
+            # close any tags opened after this one, then this one
+            while self.stack:
+                t = self.stack.pop()
+                self.out.append(f"</{t}>")
+                if t == tag:
+                    break
+
+    def handle_data(self, data):
+        self.out.append(_esc(data))
+
+    def result(self):
+        while self.stack:
+            self.out.append(f"</{self.stack.pop()}>")
+        return "".join(self.out)
+
+
+def sanitize_html(s) -> str:
+    p = _Sanitizer()
+    p.feed(str(s or ""))
+    return p.result()
 
 
 def _yesno_options(q):
@@ -1415,13 +1503,14 @@ def _validate_questions(qs, errors, warnings):
             nq["label"] = str(q["label"])
         text = q.get("text")
         if text:
-            nq["text"] = [str(p) for p in text] if isinstance(text, list) else [str(text)]
+            parts = text if isinstance(text, list) else [text]
+            nq["text"] = [sanitize_html(p) for p in parts]   # rendered as HTML
         sect = q.get("section")
         if isinstance(sect, dict):
             nq["section"] = {"style": int(sect.get("style") or 1),
                              "kicker": str(sect.get("kicker") or ""),
                              "title": str(sect.get("title") or ""),
-                             "sub": str(sect.get("sub") or "")}
+                             "sub": sanitize_html(sect.get("sub") or "")}
         if "allow_abstain" in q:
             nq["allow_abstain"] = bool(q["allow_abstain"])
         if "required" in q:

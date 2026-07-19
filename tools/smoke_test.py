@@ -770,4 +770,24 @@ ok(c.post("/p/scheduled_test/vote", json={"code": "O" * 16, "answers": {"m1": "Y
 ok(c.post("/admin/api/polls/special_ref/open", headers=hdr).status_code == 409,
    "finalized election refuses the open button")
 
+# ---- admin-HTML sanitizer + security headers (stored-XSS defense) ----
+XSS_Q = [{"key": "measure", "type": "yesno", "title": "A budget measure?",
+          "text": ["Vote <b>yes</b> to <script>steal(document.cookie)</script> fund it.",
+                   "<a href=\"javascript:evil()\">bad</a> <a href=\"https://ok.org\">ok</a>"]}]
+r = c.post("/admin/api/polls/xss_test", headers=hdr,
+           json={"name": "XSS Test", "questions": XSS_Q})
+ok(r.status_code == 200, "poll with rich-text description saves")
+page = c.get("/p/xss_test/").data.decode()
+ok("<script>steal" not in page and "steal(document.cookie)" in page,
+   "planted <script> is neutralized to text on the ballot page")
+ok('href="javascript:' not in page and 'href="https://ok.org"' in page,
+   "javascript: URL stripped, safe URL kept")
+ok("<b>yes</b>" in page, "allowed formatting preserved")
+
+hdrs = c.get("/p/xss_test/").headers
+ok("connect-src 'self'" in hdrs.get("Content-Security-Policy", ""),
+   "CSP restricts connect-src to same origin (no off-origin exfiltration)")
+ok(hdrs.get("X-Content-Type-Options") == "nosniff" and
+   hdrs.get("X-Frame-Options") == "DENY", "security headers present")
+
 print(f"SMOKE TEST: all {passed} checks passed")
