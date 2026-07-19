@@ -44,6 +44,19 @@
   .provrow b{font-family:var(--disp);font-size:1.1rem;text-transform:uppercase}
   .provrow .fields{margin:6px 0;line-height:1.5}
   .newcode{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:1.1rem;letter-spacing:.06em;background:var(--cream);border:1px dashed var(--ink);padding:6px 12px;display:inline-block;margin-top:8px}
+  /* ---- results charts (palette CVD-validated: #dd1111 / #2a78d6 / #767676) ---- */
+  .rb-row{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:.82rem}
+  .rb-name{flex:0 0 150px;text-align:right;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rb-track{flex:1;position:relative;height:18px;background:var(--cream);border:1px solid rgba(0,0,0,.2)}
+  .rb-fill{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0;min-width:0}
+  .f-elected{background:#dd1111}.f-cont{background:#2a78d6}.f-muted{background:#767676}
+  .rb-val{flex:0 0 110px;font-variant-numeric:tabular-nums;font-size:.78rem}
+  .rb-val b{font-size:.85rem}
+  .rb-quota{position:absolute;top:-3px;bottom:-3px;width:2px;background:#000}
+  .stagecard{border:1px solid rgba(0,0,0,.25);padding:8px 10px;margin:8px 0;background:#fff}
+  .stagehead{font-weight:700;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:var(--dsa)}
+  .chart-legend{font-size:.72rem;margin:6px 0 2px;color:rgba(0,0,0,.7)}
+  .chart-legend i{display:inline-block;width:11px;height:11px;margin:0 3px -1px 10px;border-radius:2px}
   .tabs{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
   .tab{font-family:var(--disp);font-weight:800;font-size:1.05rem;letter-spacing:.04em;text-transform:uppercase;
     padding:8px 14px;border:1px solid var(--ink);background:#fff;cursor:pointer}
@@ -570,16 +583,16 @@ function loadResults(live){
       html += "<div class='provrow'><b>"+esc(q.title)+"</b>"+
         (q.secret ? " <span class='chip'>secret ballot</span>" : "")+"<div class='fields'>";
       if(q.type==="yesno"){
-        html += "Yes "+q.counts.YES+" · No "+q.counts.NO+" · Abstain "+q.counts.ABSTAIN+
-          " — <b>"+esc(q.result)+"</b> <small>(abstentions excluded)</small>";
+        html += "<b>"+esc(q.result)+"</b> <small>(abstentions excluded)</small>"+
+          barChart([["Yes", q.counts.YES, "f-elected"], ["No", q.counts.NO, "f-cont"],
+                    ["Abstain", q.counts.ABSTAIN, "f-muted"]]);
       } else if(q.type==="ranked"){
         html += "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
         if(q.alternates) html += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
-        html += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+
-          " · "+q.stages+" stage(s)</small><br/><small>First preferences: "+
-          esc(Object.keys(q.first_prefs).map(function(n){ return n+" "+q.first_prefs[n]; }).join(" · "))+"</small>";
+        html += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
+        html += stvChart(q);
       } else if(q.type==="multi"){
-        html += esc(Object.keys(q.counts).map(function(n){ return n+" "+q.counts[n]; }).join(" · ")||"—");
+        html += barChart(Object.keys(q.counts).map(function(n){ return [n, q.counts[n], "f-cont"]; }));
       } else if(q.type==="text"){
         html += q.responses+" response(s) — "+esc(q.note);
       }
@@ -587,6 +600,62 @@ function loadResults(live){
     });
     $("results-view").innerHTML = html;
   });
+}
+function barChart(rows){
+  // horizontal bars, direct value labels, tooltips on hover
+  var max = Math.max(1, Math.max.apply(null, rows.map(function(r){ return r[1]; })));
+  return rows.map(function(r){
+    var pct = Math.round(r[1]/max*1000)/10;
+    return "<div class='rb-row' title='"+esc(r[0])+": "+r[1]+"'>"+
+      "<span class='rb-name'>"+esc(r[0])+"</span>"+
+      "<span class='rb-track'><span class='rb-fill "+r[2]+"' style='width:"+pct+"%'></span></span>"+
+      "<span class='rb-val'><b>"+r[1]+"</b></span></div>";
+  }).join("");
+}
+function stvChart(q){
+  // round-by-round: fixed candidate order (stage-1 totals desc), quota marker,
+  // status via color + explicit ✓/✗ text (never color alone), deltas per round
+  var stages = q.stages || [];
+  if(!stages.length) return "";
+  var order = Object.keys(stages[0].totals).sort(function(a,b){ return stages[0].totals[b]-stages[0].totals[a]; });
+  var scaleMax = q.quota;
+  stages.forEach(function(st){ order.forEach(function(c){
+    if(st.totals[c] != null) scaleMax = Math.max(scaleMax, st.totals[c]); }); });
+  scaleMax *= 1.08;
+  var html = "<div class='chart-legend'>Round-by-round (Scottish STV):"+
+    "<i class='f-elected'></i>✓ elected <i class='f-cont'></i>continuing "+
+    "<i class='f-muted'></i>✗ excluded / non-transferable · <b>|</b> quota "+q.quota+"</div>";
+  stages.forEach(function(st, si){
+    var prev = si ? stages[si-1] : null;
+    html += "<div class='stagecard'><p class='stagehead'>Stage "+st.stage+" · "+esc(st.action)+"</p>";
+    order.forEach(function(cand){
+      var v = st.totals[cand];
+      var status = st.status[cand];
+      var out = (v == null);   // dropped from the count after exclusion
+      var val = out ? 0 : v;
+      var pct = Math.round(val/scaleMax*1000)/10;
+      var cls = status==="elected" ? "f-elected" : status==="excluded"||out ? "f-muted" : "f-cont";
+      var mark = status==="elected" ? " ✓" : (status==="excluded"||out) ? " ✗" : "";
+      var delta = "";
+      if(prev && !out && prev.totals[cand] != null){
+        var dv = Math.round((v - prev.totals[cand])*100)/100;
+        if(dv) delta = " <span class='rb-delta'>("+(dv>0?"+":"")+dv+")</span>";
+      }
+      html += "<div class='rb-row' title='"+esc(cand)+": "+(out?"excluded":val)+"'>"+
+        "<span class='rb-name'>"+esc(cand)+mark+"</span>"+
+        "<span class='rb-track'>"+
+          (out?"":"<span class='rb-fill "+cls+"' style='width:"+pct+"%'></span>")+
+          "<span class='rb-quota' style='left:"+Math.round(q.quota/scaleMax*1000)/10+"%'></span>"+
+        "</span><span class='rb-val'>"+(out?"<small>out</small>":"<b>"+(Math.round(v*100)/100)+"</b>"+delta)+"</span></div>";
+    });
+    if(st.nontransferable) html += "<div class='rb-row' title='non-transferable: "+st.nontransferable+"'>"+
+      "<span class='rb-name'><small>non-transferable</small></span>"+
+      "<span class='rb-track'><span class='rb-fill f-muted' style='width:"+
+      (Math.round(st.nontransferable/scaleMax*1000)/10)+"%'></span></span>"+
+      "<span class='rb-val'><small>"+(Math.round(st.nontransferable*100)/100)+"</small></span></div>";
+    html += "</div>";
+  });
+  return html;
 }
 $("results-load").onclick = function(){ loadResults(false); };
 $("results-live").onclick = function(){ loadResults(true); };

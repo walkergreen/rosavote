@@ -1616,7 +1616,7 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
             entry.update(seats=seats, valid_ballots=res["valid_ballots"],
                          quota=res["quota"], winners=res["winners"],
                          first_prefs=res["stages"][0]["totals"],
-                         stages=len(res["stages"]))
+                         stages=res["stages"])   # full round-by-round data for charts
             alts = int(q.get("alternates", 0))
             if alts:
                 recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts))

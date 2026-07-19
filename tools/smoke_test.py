@@ -467,6 +467,10 @@ ok(res["measure"]["counts"] == {"YES": 1, "NO": 1, "ABSTAIN": 0}
    and res["measure"]["result"] == "TIE", "yesno tally + verdict")
 ok(len(res["officer"]["winners"]) == 2 and res["officer"]["secret"],
    "ranked STV winners from secret ballots")
+ok(isinstance(res["officer"]["stages"], list) and len(res["officer"]["stages"]) >= 1
+   and isinstance(res["officer"]["stages"][0]["totals"], dict)
+   and "action" in res["officer"]["stages"][0],
+   "ranked results carry full round-by-round stage data for charts")
 ok(res["why"]["responses"] == 1, "text answers counted, not displayed")
 ok(c.get("/admin/api/polls/special_ref/results", headers=chi_hdr).status_code == 403,
    "results scoped to chapter tokens' own polls")
