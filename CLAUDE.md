@@ -32,7 +32,7 @@ python3 tools/seed_config.py admin --name "NYC admins" --role chapter --polls de
 ```
 
 There is no build step. The Dockerfile serves `vote_service.py` + template via
-gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
+gunicorn. Firestore Native mode already exists in `dsa-org-tools`. Cloud Run runs as the least-privilege SA `rosavote-run@dsa-org-tools.iam.gserviceaccount.com` (datastore.user + secretAccessor on ballot-admin-token + bigquery.jobUser; NOT the default Editor SA — deploy with `--service-account`). Firestore PITR is on (7-day). Admin HTML is sanitized (`sanitize_html`); CSP + security headers on every response.
 
 ## Files
 
