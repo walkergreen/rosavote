@@ -675,7 +675,7 @@ RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
 
 
 _PUB_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — Results — DSA Vote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — Results — RosaVote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <style>*{{box-sizing:border-box}}body{{font:16px/1.5 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
 .banner{{background:#dd1111;color:#fff5e5;padding:14px 18px;font-family:"Arial Narrow",sans-serif;
 font-weight:bold;text-transform:uppercase;font-size:1.4rem}}.banner small{{display:block;font-size:.85rem;opacity:.9}}
@@ -692,9 +692,9 @@ h2{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:0 0 8p
 font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#dd1111;font-weight:700}}
 footer{{text-align:center;font:12px system-ui,sans-serif;color:rgba(0,0,0,.55);padding:16px}}
 a{{color:#dd1111}}</style></head><body>
-<div class="banner"><img src="/logo.svg" alt="" style="height:30px;vertical-align:-8px;margin-right:6px"/>DSA Vote<small>{title} — Official Results</small></div>
+<div class="banner"><img src="/logo.svg" alt="" style="height:30px;vertical-align:-8px;margin-right:6px"/>RosaVote<small>{title} — Official Results</small></div>
 <main>{body}</main>
-<footer><b>DSA Vote</b> · results certified by the body conducting the election ·
+<footer><b>RosaVote</b> · results certified by the body conducting the election ·
 <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br/>Built with 🌹 by Walker Green</footer>
 </body></html>"""
 
@@ -857,7 +857,7 @@ def provisional(poll_id):
 
 SPLASH = """<!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>DSA Vote — Chapter Member Ballot</title>
+<title>RosaVote — Chapter Member Ballot</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
@@ -897,8 +897,8 @@ SPLASH = """<!doctype html><html lang="en"><head>
   footer b{color:var(--dsa)}
 </style></head><body>
 <header class="band"><div class="band-in">
-  <div class="wm">DSA Vote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
-  <a class="rose" href="/" aria-label="DSA Vote home" style="border:none;padding:0;display:flex;"><img src="/logo.svg" alt="" width="34" height="34"/></a>
+  <div class="wm">RosaVote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
+  <a class="rose" href="/" aria-label="RosaVote home"><img src="/logo.svg" alt="" width="34" height="34"/></a>
 </div></header>
 <main>
   <div class="marks"></div>
@@ -1254,7 +1254,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>DSA Vote</b> &middot; Prototype build &mdash; not a live election &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; Prototype build &mdash; not a live election &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
 </body></html>"""
 
 
@@ -2282,7 +2282,7 @@ def admin_export_blt(poll_id, qkey):
 
 
 def _results_txt(res: dict) -> str:
-    out = [f"DSA Vote Election Results", "", res.get("name") or res["poll_id"], ""]
+    out = [f"RosaVote Election Results", "", res.get("name") or res["poll_id"], ""]
     out.append(f"Ballots counted: {res['ballots_counted']}"
                + ("  (WEIGHTED — ballots count at each voter's weight)" if res.get("weighted") else ""))
     out.append("")
@@ -2332,7 +2332,7 @@ def _results_txt(res: dict) -> str:
 def _results_csv(res: dict) -> str:
     rows = [f'"Election for","{res.get("name") or res["poll_id"]}"',
             f'"Ballots counted",{res["ballots_counted"]}',
-            f'"Weighted","{bool(res.get("weighted"))}"', '"DSA Vote",""']
+            f'"Weighted","{bool(res.get("weighted"))}"', '"RosaVote",""']
     for q in res["questions"]:
         rows.append("")
         rows.append(f'"Contest","{q["title"]}"')
@@ -2919,24 +2919,25 @@ def admin_void(poll_id):
 
 
 _LEGAL_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — DSA Vote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — RosaVote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <style>body{{font:16px/1.55 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
 main{{max-width:640px;margin:0 auto;padding:24px 18px 60px}}
 h1{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase}}h2{{font-size:1.05rem}}
 .banner{{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;
 font-weight:bold;text-transform:uppercase}} .draft{{background:#ffe1b2;border:1px solid #000;
 padding:8px 12px;font-size:.85rem}} a{{color:#dd1111}}</style></head><body>
-<div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>DSA Vote</div><main><h1>{title}</h1>
+<div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>RosaVote</div><main><h1>{title}</h1>
 <p class="draft">DRAFT — prototype language pending review by DSA staff and counsel.
 This service is a prototype and not a live election unless explicitly announced.</p>
-{body}<p><a href="/">&larr; Back to DSA Vote</a></p></main></body></html>"""
+{body}<p><a href="/">&larr; Back to RosaVote</a></p></main></body></html>"""
 
 TERMS_BODY = """
 <h2>What this service is</h2>
-<p>DSA Vote is election infrastructure operated by the Democratic Socialists of
-America's staff for chapter and national votes: ballots, voter codes,
-tabulation, and results. Using a voting code, casting a ballot, or
-administering an election here means you accept these terms.</p>
+<p>RosaVote is open-source ranked-choice and STV election software
+(AGPL-3.0, © 2026 Walker Green). This deployment is operated by the
+Democratic Socialists of America's staff for chapter and national votes:
+ballots, voter codes, tabulation, and results. Using a voting code, casting
+a ballot, or administering an election here means you accept these terms.</p>
 <h2>Acceptable use</h2>
 <p>One member, one ballot (at the member's assigned voting weight). You may not
 use a voting code that was not issued to you, attempt to vote more than once,

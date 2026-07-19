@@ -588,7 +588,7 @@ ok(r.status_code == 200 and "\n-1\n" in r.get_data(as_text=True),
 ok("Terms of Use" in c.get("/terms").data.decode(), "terms page served")
 ok("Privacy Policy" in c.get("/privacy").data.decode(), "privacy page served")
 sp2 = c.get("/").data.decode()
-ok("DSA Vote" in sp2 and "Built with 🌹 by Walker Green" in sp2, "splash rebranded")
+ok("RosaVote" in sp2 and "Built with 🌹 by Walker Green" in sp2, "splash rebranded")
 ok("value {" not in "".join(  # narrative strings render with transfer values
     st["action"] for q in res.values() if isinstance(q, dict) and q.get("stages")
     for st in q["stages"]), "stage actions well-formed")

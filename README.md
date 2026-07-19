@@ -1,4 +1,4 @@
-# DSA Vote 🌹
+# RosaVote
 
 Code-authenticated, multi-chapter election infrastructure for the Democratic
 Socialists of America: ballots, voter codes, Scottish STV tabulation (with
@@ -20,5 +20,5 @@ later version. If you run a modified version of this software as a network
 service, you must offer its users the corresponding source code.
 
 See [LICENSE](LICENSE) for the full text. Election transparency is the point:
-anyone operating a modified DSA Vote must let its voters see the code that
+anyone operating a modified RosaVote must let its voters see the code that
 counts their ballots.
