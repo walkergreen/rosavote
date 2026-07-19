@@ -696,7 +696,7 @@ for m in ("irv", "approval", "borda"):
               json={"question": "officer", "method": m}).status_code == 200,
        f"{m} recount preview")
 ok(c.post("/admin/api/polls/special_ref/recount_preview", headers=hdr,
-          json={"question": "officer", "method": "meek"}).status_code == 400,
+          json={"question": "officer", "method": "condorcet"}).status_code == 400,
    "unknown method rejected")
 
 r = c.post("/admin/api/polls/special_ref/publish", headers=hdr, json={"publish": True})
@@ -711,5 +711,45 @@ ok(c.post("/admin/api/polls/special_ref/publish", headers=hdr,
           json={"publish": False}).status_code == 200
    and "Results not published" in c.get("/p/special_ref/results").data.decode(),
    "unpublish takes the page down")
+
+# ---- meek preview + frozen published-results cache ----
+ok(c.post("/admin/api/polls/special_ref/recount_preview", headers=hdr,
+          json={"question": "officer", "method": "meek"}).status_code == 200,
+   "meek STV recount preview")
+
+r = c.post("/admin/api/polls/special_ref/publish", headers=hdr, json={"publish": True})
+ok(r.status_code == 200 and ("special_ref__published", "results") in DOCS,
+   "publish freezes results into the published cache doc")
+import json as _json  # noqa: E402
+frozen = _json.loads(DOCS[("special_ref__published", "results")]["json"])
+ok(frozen["ballots_counted"] == 3 and any(q["type"] == "ranked"
+   for q in frozen["questions"]), "frozen results carry full payload")
+r = c.get("/admin/api/polls/special_ref/results", headers=hdr)
+ok(r.status_code == 200 and r.get_json().get("cached") is True,
+   "finalized results serve from the frozen cache")
+ok("cached" not in c.get("/admin/api/polls/special_ref/results?fresh=1",
+                         headers=hdr).get_json(), "?fresh=1 recomputes")
+ok("Official Results" in c.get("/p/special_ref/results").data.decode(),
+   "public page renders from the frozen cache")
+
+# ---- official Meek STV contests (YDSA delegate elections) ----
+YDSA_QS = [{"key": "dels", "type": "ranked", "title": "Elect 2 YDSA delegates",
+            "seats": 2, "method": "meek",
+            "options": [{"id": "A1", "name": "Ava"}, {"id": "B2", "name": "Ben"},
+                        {"id": "C3", "name": "Cal"}]}]
+ok(c.post("/admin/api/polls/ydsa_test", headers=hdr,
+          json={"name": "YDSA Test", "questions": YDSA_QS}).status_code == 200,
+   "meek-method poll saves")
+ok(c.post("/admin/api/polls/ydsa_test", headers=hdr, json={
+    "name": "x", "questions": [dict(YDSA_QS[0], method="banana")]}).status_code == 400,
+   "unknown official method rejected")
+for i, ranking in enumerate([["A1", "B2"]] * 3 + [["B2"]] * 2 + [["C3", "A1"]]):
+    cc = f"YDSA{i:02d}__PADPADPAD"
+    ok(c.post("/p/ydsa_test/vote", json={"code": cc, "answers": {"dels": ranking}})
+       .status_code == 200, f"ydsa vote {i}")
+r = c.get("/admin/api/polls/ydsa_test/results?live=1", headers=hdr)
+yq = r.get_json()["questions"][0]
+ok(yq["method_used"].startswith("Meek STV") and len(yq["winners"]) == 2
+   and len(yq["stages"]) >= 1, "official Meek count with stage log")
 
 print(f"SMOKE TEST: all {passed} checks passed")

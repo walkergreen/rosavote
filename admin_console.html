@@ -235,7 +235,8 @@
         Candidates in quota contests must carry a <code>tags</code> list (may be empty =
         attributes collected, none apply).</p>
         <p style="font-size:.78rem;margin:6px 0 0">Types: <code>yesno</code> ·
-        <code>ranked</code> (options, seats, alternates; <code>secret</code> hides identity;
+        <code>ranked</code> (options, seats, alternates; <code>"method":"meek"</code> for Meek STV
+        — required for YDSA delegate elections; <code>secret</code> hides identity;
         <code>delegate</code> additionally enforces Art. V) · <code>multi</code> ·
         <code>text</code>. Leave empty on a legacy demo poll to keep its built-in
         8-question ballot.</p>
@@ -796,7 +797,7 @@ function loadResults(live){
       } else if(q.type==="ranked"){
         html += "<div id='cv-"+q.key+"'>"+rankedBlock(q)+"</div>";
         if(q.unconstrained){
-          var uq = {key:q.key+"_u", seats:q.seats, winners:q.unconstrained.winners,
+          var uq = {key:q.key+"_u", seats:q.seats, method_used:q.method_used, winners:q.unconstrained.winners,
                     alternates:q.unconstrained.alternates, valid_ballots:q.valid_ballots,
                     quota:q.unconstrained.quota||q.quota, stages:q.unconstrained.stages};
           html += "<div id='uv-"+q.key+"' style='display:none'><p class='kicker'>Comparison — quota requirements NOT applied (not the official result)</p>"+rankedBlock(uq)+"</div>";
@@ -806,7 +807,8 @@ function loadResults(live){
           "<option value='plurality'>Plurality / SNTV</option>"+
           "<option value='irv'>Sequential IRV (SF-style RCV)</option>"+
           "<option value='approval'>Approval voting</option>"+
-          "<option value='borda'>Borda count</option></select> "+
+          "<option value='borda'>Borda count</option>"+
+          "<option value='meek'>Meek STV (NZ rules)</option></select> "+
           "<button class='btn ghost sm' onclick=\"methodPreview('"+q.key+"')\">Recount preview under this method</button></div>"+
           "<div id='mpv-"+q.key+"'></div>";
       } else if(q.type==="multi"){
@@ -832,7 +834,7 @@ function rankedBlock(q){
       return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc ? "✓" : "✗ VIOLATED");
     }).join(" · ");
   }
-  h += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
+  h += "<br/><small>"+esc(q.method_used||"Scottish STV")+" · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
   h += stvChart(q);
   return h;
 }

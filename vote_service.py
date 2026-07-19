@@ -723,7 +723,7 @@ def public_results(poll_id):
                  'by its administrators (or voting is still under way). Check '
                  'back later, or contact your chapter.</p></div>'),
             mimetype="text/html")
-    res = compute_results(poll_id, cfg)
+    res = _read_published_results(poll_id) or _store_published_results(poll_id, cfg)
     cards = []
     for q in res["questions"]:
         inner = ""
@@ -754,7 +754,7 @@ def public_results(poll_id):
             inner += '<p class="k">First preferences</p>' + "".join(
                 _pub_bar(n, v, vmax, "" if n in q["winners"] else "b")
                 for n, v in sorted(fp.items(), key=lambda kv: -kv[1]))
-            inner += (f'<p class="win"><small>Scottish STV · {q["valid_ballots"]} valid '
+            inner += (f'<p class="win"><small>{_esc(q.get("method_used") or "Scottish STV")} · {q["valid_ballots"]} valid '
                       f'ballots · quota {q["quota"]} · full round-by-round record held '
                       'by election administration</small></p>')
         elif q["type"] == "multi":
@@ -1465,6 +1465,11 @@ def _validate_questions(qs, errors, warnings):
                 return max(v, minimum)
             nq["seats"] = _n("seats", 1, 1)
             nq["alternates"] = _n("alternates", 0, 0)
+            method = str(q.get("method") or "scottish").strip().lower()
+            if method not in ("scottish", "meek"):
+                errors.append(f"question {key!r}: method must be scottish or meek")
+                method = "scottish"
+            nq["method"] = method   # meek is required for YDSA delegate elections
             # quota constraints for leadership elections (NPC-style: e.g.
             # max 13 cis_man; min 8 marginalized) — chapters set their own
             cons_in = q.get("constraints") or []
@@ -1978,10 +1983,13 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
                 entry["group_partial"] = glater_seats > 0   # body not complete yet
             ctags = {i + 1: o["tags"] for i, o in enumerate(options)
                      if o.get("tags")} or None
-            res = stv_tabulate.count(_blt_text(rows, key, options, seats),
-                                     constraints=cons, cand_tags=ctags,
-                                     pre_elected=gpre, later_seats=glater_seats,
-                                     later_supply=glater_supply)
+            counter = stv_tabulate.count_meek if q.get("method") == "meek" \
+                else stv_tabulate.count
+            res = counter(_blt_text(rows, key, options, seats),
+                          constraints=cons, cand_tags=ctags,
+                          pre_elected=gpre, later_seats=glater_seats,
+                          later_supply=glater_supply)
+            entry["method_used"] = res["method"]
             entry.update(seats=seats, valid_ballots=res["valid_ballots"],
                          quota=res["quota"], winners=res["winners"],
                          first_prefs=res["stages"][0]["totals"],
@@ -1990,20 +1998,20 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
                 entry["constraints"] = res["constraints"]
             alts = int(q.get("alternates", 0))
             if alts:
-                recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts),
-                                             constraints=cons, cand_tags=ctags,
-                                             pre_elected=gpre, later_seats=glater_seats,
-                                             later_supply=glater_supply)
+                recount = counter(_blt_text(rows, key, options, seats + alts),
+                                  constraints=cons, cand_tags=ctags,
+                                  pre_elected=gpre, later_seats=glater_seats,
+                                  later_supply=glater_supply)
                 entry["alternates"] = [w for w in recount["winners"]
                                        if w not in res["winners"]]
             if cons:
                 # the admin-facing comparison: same ballots, quotas off
-                res_u = stv_tabulate.count(_blt_text(rows, key, options, seats))
+                res_u = counter(_blt_text(rows, key, options, seats))
                 entry["unconstrained"] = {"winners": res_u["winners"],
                                           "quota": res_u["quota"],
                                           "stages": res_u["stages"]}
                 if alts:
-                    ru = stv_tabulate.count(_blt_text(rows, key, options, seats + alts))
+                    ru = counter(_blt_text(rows, key, options, seats + alts))
                     entry["unconstrained"]["alternates"] = [
                         w for w in ru["winners"] if w not in res_u["winners"]]
             if group and group in qgroups:
@@ -2050,6 +2058,10 @@ def admin_poll_results(poll_id):
                                        "admins can view a live tally with ?live=1 "
                                        "(audited)."}), 409
         _audit(poll_id, "live_results_view", ident["name"])
+    elif not request.args.get("fresh"):
+        cached = _read_published_results(poll_id)
+        if cached:
+            return jsonify(dict(cached, cached=True)), 200
     out = compute_results(poll_id, cfg)
     out["live"] = not cfg.get("finalized")
     return jsonify(out), 200
@@ -2133,6 +2145,38 @@ def admin_recount_preview(poll_id):
     return jsonify(res), 200
 
 
+# Published results are FROZEN at publish time into {poll}__published/results
+# (a JSON blob) and served from an in-process cache — a public results page
+# hit is then one cached dict render, no Firestore streaming and no
+# re-tabulation, so viral traffic costs ~nothing and can't slow voting.
+_pub_cache = {}
+PUB_CACHE_TTL = 60.0
+
+
+def _store_published_results(poll_id: str, cfg: dict) -> dict:
+    res = compute_results(poll_id, cfg)
+    db.collection(f"{poll_id}__published").document("results").set({
+        "json": json.dumps(res), "generated_at": int(time.time())})
+    _pub_cache[poll_id] = (time.time(), res)
+    return res
+
+
+def _read_published_results(poll_id: str):
+    hit = _pub_cache.get(poll_id)
+    if hit and time.time() - hit[0] < PUB_CACHE_TTL:
+        return hit[1]
+    try:
+        snap = db.collection(f"{poll_id}__published").document("results").get()
+        if getattr(snap, "exists", False):
+            res = json.loads((snap.to_dict() or {}).get("json") or "{}")
+            if res:
+                _pub_cache[poll_id] = (time.time(), res)
+                return res
+    except Exception:
+        pass
+    return None
+
+
 @app.post("/admin/api/polls/<poll_id>/publish")
 def admin_publish_results(poll_id):
     """Publish (or unpublish) the poll's PUBLIC results page at
@@ -2151,6 +2195,8 @@ def admin_publish_results(poll_id):
     publish = bool((request.get_json(silent=True) or {}).get("publish", True))
     db.collection(CONFIG_COLL).document(poll_id).set(
         cfg_to_doc(dict(cfg, results_published=publish)))
+    if publish:
+        _store_published_results(poll_id, cfg)   # freeze + cache for mass viewing
     _audit(poll_id, "results_publish" if publish else "results_unpublish", ident["name"])
     load_polls(force=True)
     return jsonify({"ok": True, "published": publish,
@@ -2217,7 +2263,7 @@ def _results_txt(res: dict) -> str:
             out.append(f"  Yes {c['YES']} · No {c['NO']} · Abstain {c['ABSTAIN']}"
                        f"  ->  {q['result']} (abstentions excluded)")
         elif q["type"] == "ranked":
-            out.append(f"  Scottish STV · {q['seats']} seat(s) · "
+            out.append(f"  {q.get('method_used', 'Scottish STV')} · {q['seats']} seat(s) · "
                        f"{q['valid_ballots']} valid ballots · quota {q['quota']}")
             for st in q["stages"]:
                 out.append(f"  Stage {st['stage']}: {st['action']}")

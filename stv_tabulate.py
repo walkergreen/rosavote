@@ -304,7 +304,182 @@ def count(blt_text: str, constraints=None, cand_tags=None,
     return out
 
 
-ALT_METHODS = ("plurality", "approval", "borda", "irv")
+ALT_METHODS = ("plurality", "approval", "borda", "irv", "meek")
+
+
+def count_meek(blt_text: str, constraints=None, cand_tags=None,
+               pre_elected=None, later_seats=0, later_supply=None):
+    """Meek STV (the method used for New Zealand STV local elections and
+    required for YDSA delegate elections): every candidate holds a 'keep
+    factor' in [0,1]; each ballot flows down its rankings, each candidate
+    keeping weight×factor and passing the rest on. Elected candidates'
+    factors shrink iteratively until each holds exactly one (shrinking)
+    quota — surpluses transfer continuously, and the quota falls as ballots
+    exhaust. Returns the same result shape as count(), including a stage
+    log. Supports the same quota-constraint and full-body-group parameters.
+
+    Floating-point implementation with 1e-9 tolerances; exported BLTs can be
+    cross-checked in OpaVote's Meek STV."""
+    n_cands, seats, withdrawn, ballots, names, title = parse_blt(blt_text)
+    active = [c for c in range(1, n_cands + 1) if c not in withdrawn]
+    constraints = constraints or []
+    cand_tags = {int(k): set(v) for k, v in (cand_tags or {}).items()}
+    pre = {k: int(v) for k, v in (pre_elected or {}).items()}
+    later_supply = {k: int(v) for k, v in (later_supply or {}).items()}
+    later_seats = int(later_seats or 0)
+
+    keep = {c: 1.0 for c in active}
+    status = {c: "hopeful" for c in active}
+    elected_order = []
+    stages = []
+    valid = sum(w for w, ranks in ballots if any(r in keep for r in ranks))
+    votes, quota, excess = {c: 0.0 for c in active}, 0.0, 0.0
+
+    def has(c, tag):
+        return tag in cand_tags.get(c, ())
+
+    def elected_count(tag):
+        return pre.get(tag, 0) + sum(1 for c in elected_order if has(c, tag))
+
+    def hopefuls():
+        return [c for c in active if status[c] == "hopeful"]
+
+    def can_elect(c):
+        s_rem = seats - len(elected_order) - 1 + later_seats
+        for con in constraints:
+            t = con["tag"]
+            if "max" in con and has(c, t) and elected_count(t) + 1 > con["max"]:
+                return False
+            if "min" in con:
+                e = elected_count(t) + (1 if has(c, t) else 0)
+                need = max(0, con["min"] - e)
+                supply = sum(1 for x in hopefuls() if x != c and has(x, t)) \
+                    + later_supply.get(t, 0)
+                if need > s_rem or need > supply:
+                    return False
+        return True
+
+    def guarded_set():
+        g = set()
+        s_rem = seats - len(elected_order)
+        for con in constraints:
+            t = con["tag"]
+            if "min" in con:
+                later_cap = min(later_supply.get(t, 0), later_seats)
+                need = max(0, con["min"] - elected_count(t) - later_cap)
+                members = [x for x in hopefuls() if has(x, t)]
+                if need > 0 and need >= len(members):
+                    g |= set(members)
+            if "max" in con:
+                room = con["max"] - elected_count(t)
+                nonmembers = [x for x in hopefuls() if not has(x, t)]
+                if nonmembers and s_rem - room >= len(nonmembers):
+                    g |= set(nonmembers)
+        return g
+
+    def snapshot(action):
+        stages.append({
+            "stage": len(stages) + 1,
+            "action": action,
+            "quota": round(quota, 5),
+            "totals": {names[c - 1]: round(votes[c], 5) for c in active
+                       if status[c] != "excluded"},
+            "status": {names[c - 1]: ("elected" if status[c] == "elected"
+                                      else "continuing") for c in active
+                       if status[c] != "excluded"},
+            "nontransferable": round(excess, 5),
+            "elected_so_far": [names[c - 1] for c in elected_order],
+        })
+
+    def converge():
+        nonlocal votes, quota, excess
+        newly = []
+        for _ in range(1000):
+            votes = {c: 0.0 for c in active}
+            excess = 0.0
+            for w, ranks in ballots:
+                weight = float(w)
+                rs = [r for r in ranks if r in votes and status[r] != "excluded"]
+                for r in rs:
+                    kept = weight * keep[r]
+                    votes[r] += kept
+                    weight -= kept
+                    if weight <= 1e-12:
+                        break
+                if rs:
+                    excess += weight
+            quota = max((valid - excess) / (seats + 1), 1e-9)
+            changed = False
+            for c in sorted(active, key=lambda c: -votes[c]):
+                if status[c] == "hopeful" and votes[c] >= quota - 1e-9 \
+                        and len(elected_order) < seats and can_elect(c):
+                    status[c] = "elected"
+                    elected_order.append(c)
+                    newly.append(c)
+                    changed = True
+            for c in elected_order:
+                if votes[c] > quota and votes[c] > 0:
+                    nk = keep[c] * quota / votes[c]
+                    if abs(nk - keep[c]) > 1e-10:
+                        keep[c] = nk
+                        changed = True
+            if not changed:
+                break
+        return newly
+
+    guard = 0
+    while guard < 400:
+        guard += 1
+        newly = converge()
+        if newly:
+            snapshot("Keep factors converged; "
+                     + ", ".join(names[c - 1] for c in newly)
+                     + " reached the quota and "
+                     + ("is" if len(newly) == 1 else "are") + " elected")
+        h = hopefuls()
+        if len(elected_order) >= seats or not h:
+            break
+        doomed = [c for c in h if not can_elect(c)]
+        if doomed:
+            c = min(doomed, key=lambda x: (votes[x], x))
+            status[c] = "excluded"
+            snapshot(f"{names[c - 1]} excluded — electing them would violate a "
+                     "quota requirement; their ballots flow onward")
+            continue
+        if len(elected_order) + len(h) <= seats:
+            for c in sorted(h, key=lambda c: -votes[c]):
+                status[c] = "elected"
+                elected_order.append(c)
+            snapshot("Remaining candidates elected to fill the last vacancies")
+            break
+        guarded = guarded_set()
+        excludable = [c for c in h if c not in guarded]
+        if not excludable:
+            for c in sorted(h, key=lambda c: -votes[c])[:seats - len(elected_order)]:
+                status[c] = "elected"
+                elected_order.append(c)
+            snapshot("All continuing candidates are guarded by quota requirements "
+                     "and are elected to the remaining seats")
+            break
+        c = min(excludable, key=lambda x: (votes[x], x))
+        status[c] = "excluded"
+        snapshot(f"{names[c - 1]} excluded (lowest, {votes[c]:.5f} votes); "
+                 "their ballots flow to each voter's next choice")
+
+    out = {
+        "title": title,
+        "method": "Meek STV (NZ rules)" + (" — constrained" if constraints else ""),
+        "seats": seats,
+        "valid_ballots": valid,
+        "quota": round(quota, 5),
+        "winners": [names[c - 1] for c in elected_order[:seats]],
+        "stages": stages,
+    }
+    if constraints:
+        out["constraints"] = [dict(con, elected=pre.get(con["tag"], 0) + sum(
+            1 for c in elected_order[:seats] if has(c, con["tag"])))
+            for con in constraints]
+    return out
 
 
 def count_alternative(blt_text: str, method: str):
@@ -379,6 +554,18 @@ def count_alternative(blt_text: str, method: str):
                 "majority of continuing ballots, lowest candidates are eliminated one at "
                 "a time; for multiple seats, each winner is removed and the runoff "
                 "repeats. Majoritarian — NOT proportional like STV.")
+    elif method == "meek":
+        res = count_meek(blt_text)
+        final = res["stages"][-1]["totals"] if res["stages"] else {}
+        name_idx = {names[c - 1]: c for c in active}
+        note = ("Meek STV (New Zealand rules): iterative keep factors let surpluses "
+                "flow continuously and the quota shrink as ballots exhaust. Available "
+                "as an OFFICIAL counting method per contest (\"method\": \"meek\") — "
+                f"required for YDSA delegate elections. Final quota {res['quota']}.")
+        scores = {name_idx[n]: v for n, v in final.items() if n in name_idx}
+        for c in active:
+            scores.setdefault(c, 0)
+        winners = [name_idx[w] for w in res["winners"] if w in name_idx]
     else:
         raise ValueError(f"unknown method {method!r} (use one of {ALT_METHODS})")
 
