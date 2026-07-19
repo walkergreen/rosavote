@@ -120,6 +120,9 @@ def ok(cond, label):
 # splash + chapters
 sp = c.get("/").data.decode()
 ok(all(x in sp for x in ["Chapter Member Ballot", "For Administrators", "TEST-NYC-2026-DEMO"]), "splash")
+ok('href="/admin/"' in sp and "How to get access" in sp
+   and "How to test without affecting anything" in sp,
+   "splash links the admin console with access + test instructions")
 for pid in vote_service.CHAPTERS:
     ok(c.get(f"/p/{pid}/").status_code == 200, f"page {pid}")
 ok(c.get("/p/nope/").status_code == 404, "unknown poll 404")

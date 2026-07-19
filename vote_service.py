@@ -818,6 +818,45 @@ SPLASH = """<!doctype html><html lang="en"><head>
     </div>
   </div>
   <div class="card">
+    <div class="card-band" style="background:#000">Admin Console</div>
+    <div class="card-body">
+      <p class="kicker">Election administration</p>
+      <p>Build elections, import voter rolls, watch turnout, adjudicate
+      provisionals, void &amp; reissue, and view results &mdash; all in the
+      browser console.</p>
+      <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
+      <details style="margin-top:12px">
+        <summary>How to get access</summary>
+        <div class="dbody">
+        <p>The console needs an <b>admin token</b> (entered on its sign-in
+        screen; nothing here works without one). <b>National (root) token:</b>
+        held in Secret Manager as <code>ballot-admin-token</code> in the
+        <code>dsa-org-tools</code> project &mdash; staff with project access
+        retrieve it via
+        <code>gcloud secrets versions access latest --secret ballot-admin-token</code>.
+        <b>Chapter tokens:</b> minted by national staff
+        (<code>tools/seed_config.py admin --role chapter</code>) and scoped so a
+        chapter's admins see only their own poll. Tokens are stored hashed and
+        can't be recovered &mdash; keep them in a password manager, and every
+        admin action is recorded in the audit log under the token's name.</p>
+        </div>
+      </details>
+      <details>
+        <summary>How to test without affecting anything</summary>
+        <div class="dbody">
+        <p>Use the repeatable <b>TEST codes</b> listed at the top of this page
+        &mdash; they walk the full voting experience (ballot, review, receipt)
+        but <b>never write a ballot</b>, so test votes can't pollute results or
+        turnout. Cast as many as you like. To rehearse the admin side, create a
+        throwaway poll with the console's election builder, import a few fake
+        member IDs on the Voters tab, vote with the minted codes, close the
+        poll, and watch results unlock &mdash; then leave the test poll closed
+        or ask national to archive it.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+  <div class="card">
     <div class="card-band" style="background:#000">For Administrators &mdash; How This Works</div>
     <div class="card-body">
 
