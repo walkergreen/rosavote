@@ -71,8 +71,29 @@ def fmt(v: int) -> str:
     return f"{v / SCALE:.5f}".rstrip("0").rstrip(".")
 
 
-def count(blt_text: str):
+def count(blt_text: str, constraints=None, cand_tags=None):
+    """Scottish STV, optionally CONSTRAINED for leadership diversity quotas.
+
+    constraints: [{"tag": str, "max": int, "label": str?} |
+                  {"tag": str, "min": int, "label": str?}]
+    cand_tags:   {candidate_number(1-based): [tag, ...]}
+
+    Constrained mechanics (the standard guarded/doomed method used for
+    quota-bound union and party elections):
+      * a candidate is DOOMED — excluded regardless of votes — when electing
+        them could no longer lead to a winner set satisfying every
+        constraint (e.g. the cis-men maximum is already reached);
+      * a candidate is GUARDED — immune from exclusion — when every
+        remaining member of a group is needed to reach that group's minimum
+        (or every non-member is needed to stay under a maximum).
+    Each constraint is checked independently; with heavily overlapping
+    tags, review the stage log."""
     n_cands, seats, withdrawn, raw_ballots, names, title = parse_blt(blt_text)
+    constraints = constraints or []
+    cand_tags = {int(k): set(v) for k, v in (cand_tags or {}).items()}
+
+    def has(c, tag):
+        return tag in cand_tags.get(c, ())
 
     # a "paper" is [value, [remaining prefs]]; expand weights
     papers: dict[int, list] = {c: [] for c in range(1, n_cands + 1)}
@@ -107,9 +128,55 @@ def count(blt_text: str):
         })
         history.append(dict(totals))
 
+    def elected_count(tag):
+        return sum(1 for c in elected_order if has(c, tag))
+
+    def can_elect(c):
+        """Would electing c still allow a constraint-satisfying result?"""
+        s_rem = seats - len(elected_order) - 1     # seats left AFTER electing c
+        for con in constraints:
+            t = con["tag"]
+            if "max" in con and has(c, t) and elected_count(t) + 1 > con["max"]:
+                return False
+            if "min" in con:
+                e = elected_count(t) + (1 if has(c, t) else 0)
+                need = max(0, con["min"] - e)
+                supply = sum(1 for x in totals
+                             if state[x] == "continuing" and x != c and has(x, t))
+                if need > s_rem or need > supply:
+                    return False
+        return True
+
+    def guarded_set():
+        g = set()
+        s_rem = seats - len(elected_order)
+        continuing = [x for x in totals if state[x] == "continuing"]
+        for con in constraints:
+            t = con["tag"]
+            if "min" in con:
+                need = max(0, con["min"] - elected_count(t))
+                members = [x for x in continuing if has(x, t)]
+                if need > 0 and need >= len(members):
+                    g |= set(members)
+            if "max" in con:
+                room = con["max"] - elected_count(t)
+                nonmembers = [x for x in continuing if not has(x, t)]
+                if nonmembers and s_rem - room >= len(nonmembers):
+                    g |= set(nonmembers)
+        return g
+
+    def con_label(c):
+        for con in constraints:
+            t = con["tag"]
+            if "max" in con and has(c, t) and elected_count(t) + 1 > con["max"]:
+                return con.get("label") or f"max {con['max']} {t}"
+        return "; ".join(con.get("label") or con["tag"] for con in constraints)
+
     def declare_elected():
         newly = [c for c in totals if state[c] == "continuing" and totals[c] >= quota]
         for c in sorted(newly, key=lambda c: -totals[c]):
+            if constraints and not can_elect(c):
+                continue        # over quota but barred — doomed handling excludes it
             state[c] = "elected"
             elected_order.append(c)
 
@@ -149,6 +216,22 @@ def count(blt_text: str):
 
     while len(elected_order) < seats:
         continuing = [c for c in totals if state[c] == "continuing"]
+        if not continuing:
+            snapshot("No continuing candidates remain — seats left unfilled "
+                     "under the stated constraints")
+            break
+        # constrained: exclude DOOMED candidates before anything else
+        if constraints:
+            doomed = [c for c in continuing if not can_elect(c)]
+            if doomed:
+                c = min(doomed, key=lambda x: totals[x])
+                state[c] = "excluded"
+                transfer(c, None)
+                declare_elected()
+                snapshot(f"{names[c - 1]} excluded — electing them would violate "
+                         f"the quota requirement ({con_label(c)}); papers "
+                         "transferred at received value")
+                continue
         # rule 52: last vacancies
         if len(continuing) <= seats - len(elected_order):
             for c in sorted(continuing, key=lambda c: -totals[c]):
@@ -168,24 +251,40 @@ def count(blt_text: str):
             snapshot(f"Surplus votes of {names[c - 1]} transferred at value "
                      f"{fmt(surplus)}/{fmt(total_before)}")
             continue
-        # otherwise exclude the lowest (rules 50, 51)
-        lo = min(totals[c] for c in continuing)
-        c = tiebreak([x for x in continuing if totals[x] == lo], want_high=False)
+        # otherwise exclude the lowest (rules 50, 51) — never a GUARDED candidate
+        guarded = guarded_set() if constraints else set()
+        excludable = [c for c in continuing if c not in guarded]
+        if not excludable:
+            # every continuing candidate is needed to satisfy the quotas
+            for c in sorted(continuing, key=lambda c: -totals[c])[:seats - len(elected_order)]:
+                state[c] = "elected"
+                elected_order.append(c)
+            snapshot("All continuing candidates are guarded by quota requirements "
+                     "and are elected to the remaining seats")
+            break
+        lo = min(totals[c] for c in excludable)
+        c = tiebreak([x for x in excludable if totals[x] == lo], want_high=False)
         state[c] = "excluded"
         transfer(c, None)
         declare_elected()
+        guard_note = " (quota-guarded candidates were passed over)" \
+            if guarded and any(totals[g] <= lo for g in guarded) else ""
         snapshot(f"{names[c - 1]} excluded ({fmt(lo)} votes); papers transferred "
-                 "at the value they were received")
+                 f"at the value they were received{guard_note}")
 
-    return {
+    out = {
         "title": title,
-        "method": "Scottish STV (SSI 2007/42)",
+        "method": "Scottish STV (SSI 2007/42)" + (" — constrained" if constraints else ""),
         "seats": seats,
         "valid_ballots": valid,
         "quota": quota / SCALE,
         "winners": [names[c - 1] for c in elected_order[:seats]],
         "stages": stages,
     }
+    if constraints:
+        out["constraints"] = [dict(con, elected=sum(
+            1 for c in elected_order[:seats] if has(c, con["tag"]))) for con in constraints]
+    return out
 
 
 def print_table(result: dict):

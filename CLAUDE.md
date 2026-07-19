@@ -109,6 +109,13 @@ Section 3 "Local Issues" (q6, q8).
 **`q6` = local issue 1 = display Q7** · **`q8` = local issue 2 = display Q8**.
 Do not "fix" this by renaming keys — Firestore data and tools reference them.
 
+Ranked questions may carry QUOTA CONSTRAINTS (leadership elections):
+`options[].tags` (e.g. cis_man, marginalized) + question `constraints`
+(`[{tag, max|min, label}]`, NPC-style: max 13 cis_man / min 8 marginalized).
+`stv_tabulate.count(constraints=, cand_tags=)` runs the guarded/doomed
+constrained count; results echo per-constraint elected tallies; stage log
+names quota exclusions/guards. Any chapter can set its own via config.
+
 Windows: `timezone` (IANA, default America/New_York) — builder datetimes are
 poll-local; Art. V date math uses the poll tz. `finalized` polls reject votes
 regardless of window and refuse builder edits without an explicit

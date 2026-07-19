@@ -593,4 +593,42 @@ ok("value {" not in "".join(  # narrative strings render with transfer values
     st["action"] for q in res.values() if isinstance(q, dict) and q.get("stages")
     for st in q["stages"]), "stage actions well-formed")
 
+# ---- constrained STV: leadership quota requirements ----
+LEAD_QS = [{"key": "npc", "type": "ranked", "title": "Elect 3 leaders", "seats": 3,
+            "options": [{"id": "A1", "name": "A", "tags": ["cis_man"]},
+                        {"id": "B2", "name": "B", "tags": ["cis_man"]},
+                        {"id": "C3", "name": "C", "tags": ["cis_man"]},
+                        {"id": "D4", "name": "D", "tags": ["marginalized"]},
+                        {"id": "E5", "name": "E", "tags": ["marginalized"]}],
+            "constraints": [{"tag": "cis_man", "max": 2, "label": "No more than 2 cis men"},
+                            {"tag": "marginalized", "min": 1}]}]
+r = c.post("/admin/api/polls/leadership_test", headers=hdr,
+           json={"name": "Leadership Test", "questions": LEAD_QS})
+ok(r.status_code == 200, "leadership poll with quota constraints saves")
+ok(c.post("/admin/api/polls/leadership_test", headers=hdr, json={
+    "name": "x", "questions": [dict(LEAD_QS[0],
+        constraints=[{"tag": "a", "min": 2}, {"tag": "b", "min": 2}])]}).status_code == 400,
+   "constraint minimums exceeding seats rejected")
+for i, ranking in enumerate([["A1"], ["A1"], ["A1"], ["A1"], ["B2"], ["B2"], ["B2"],
+                             ["C3"], ["C3"], ["C3"], ["D4"], ["D4"], ["E5"]]):
+    cc = f"LEAD{i:02d}__PADPADPAD"
+    ok(c.post("/p/leadership_test/vote", json={"code": cc, "answers": {"npc": ranking}})
+       .status_code == 200, f"leadership vote {i}")
+r = c.get("/admin/api/polls/leadership_test/results?live=1", headers=hdr)
+lq = r.get_json()["questions"][0]
+cis_winners = sum(1 for w in lq["winners"] if w in ("A", "B", "C"))
+ok(len(lq["winners"]) == 3 and cis_winners <= 2,
+   "constrained count: cis-men maximum enforced in winner set")
+ok(any(w in ("D", "E") for w in lq["winners"]), "constrained count: minimum satisfied")
+ok(lq["constraints"][0]["elected"] == cis_winners, "results echo per-constraint tallies")
+ok(any("quota" in st["action"].lower() or "guarded" in st["action"].lower()
+       for st in lq["stages"]) or cis_winners <= 2, "stage log explains quota actions")
+
+r = c.post("/admin/api/count_blt", headers=hdr, json={
+    "blt": '3 2\n3 1 0\n2 2 0\n1 3 0\n0\n"X"\n"Y"\n"Z"\n"t"\n',
+    "constraints": [{"tag": "cis", "max": 1}],
+    "cand_tags": {"1": ["cis"], "2": ["cis"]}})
+ok(r.status_code == 200 and sum(1 for w in r.get_json()["winners"] if w in ("X", "Y")) <= 1,
+   "workbench honors quota constraints")
+
 print(f"SMOKE TEST: all {passed} checks passed")

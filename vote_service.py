@@ -1317,7 +1317,14 @@ def _validate_questions(qs, errors, warnings):
                     errors.append(f"question {key!r}: option {cid!r} needs a display name")
                 else:
                     seen.add(cid)
-                    opts.append({"id": cid, "name": cname, "sub": sub})
+                    opt = {"id": cid, "name": cname, "sub": sub}
+                    raw_tags = c.get("tags") if isinstance(c, dict) else None
+                    if raw_tags:
+                        tags = [str(t).strip().lower().replace(" ", "_")
+                                for t in raw_tags if str(t).strip()][:8]
+                        if tags:
+                            opt["tags"] = tags
+                    opts.append(opt)
             if not opts:
                 errors.append(f"question {key!r}: needs at least one option")
             nq["options"] = opts
@@ -1334,6 +1341,41 @@ def _validate_questions(qs, errors, warnings):
                 return max(v, minimum)
             nq["seats"] = _n("seats", 1, 1)
             nq["alternates"] = _n("alternates", 0, 0)
+            # quota constraints for leadership elections (NPC-style: e.g.
+            # max 13 cis_man; min 8 marginalized) — chapters set their own
+            cons_in = q.get("constraints") or []
+            if cons_in:
+                cons, all_tags = [], set()
+                for o in nq["options"]:
+                    all_tags |= set(o.get("tags") or [])
+                for i, con in enumerate(cons_in):
+                    if not isinstance(con, dict):
+                        errors.append(f"question {key!r}: constraints[{i}] must be an object")
+                        continue
+                    tag = str(con.get("tag") or "").strip().lower().replace(" ", "_")
+                    label = str(con.get("label") or "").strip()
+                    kind = "max" if "max" in con else "min" if "min" in con else None
+                    try:
+                        bound = int(con.get(kind)) if kind else -1
+                    except (TypeError, ValueError):
+                        bound = -1
+                    if not tag or kind is None or bound < 0:
+                        errors.append(f"question {key!r}: constraints[{i}] needs tag "
+                                      "and an integer min or max ≥ 0")
+                        continue
+                    if tag not in all_tags:
+                        warnings.append(f"question {key!r}: constraint tag {tag!r} "
+                                        "matches no candidate tags")
+                    nc = {"tag": tag, kind: bound}
+                    if label:
+                        nc["label"] = label
+                    cons.append(nc)
+                mins = sum(c["min"] for c in cons if "min" in c)
+                if mins > nq["seats"]:
+                    errors.append(f"question {key!r}: constraint minimums ({mins}) "
+                                  f"exceed the {nq['seats']} seats")
+                if cons:
+                    nq["constraints"] = cons
             nq["secret"] = bool(q.get("secret")) or bool(q.get("delegate"))
             nq["delegate"] = bool(q.get("delegate"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
@@ -1542,8 +1584,11 @@ def admin_count_blt():
     if len(blt) > 2_000_000:
         return jsonify({"error": "too_large", "message": "cap is 2 MB"}), 400
     import stv_tabulate
+    data = request.get_json(silent=True) or {}
+    cons = data.get("constraints") or None
+    ctags = data.get("cand_tags") or None
     try:
-        res = stv_tabulate.count(blt)
+        res = stv_tabulate.count(blt, constraints=cons, cand_tags=ctags)
     except Exception as e:
         return jsonify({"error": "parse_or_count_failed",
                         "message": f"{type(e).__name__}: check the BLT format "
@@ -1760,14 +1805,21 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
         elif typ == "ranked":
             options = q["options"]
             seats = int(q.get("seats", 1))
-            res = stv_tabulate.count(_blt_text(rows, key, options, seats))
+            cons = q.get("constraints") or None
+            ctags = {i + 1: o["tags"] for i, o in enumerate(options)
+                     if o.get("tags")} or None
+            res = stv_tabulate.count(_blt_text(rows, key, options, seats),
+                                     constraints=cons, cand_tags=ctags)
             entry.update(seats=seats, valid_ballots=res["valid_ballots"],
                          quota=res["quota"], winners=res["winners"],
                          first_prefs=res["stages"][0]["totals"],
                          stages=res["stages"])   # full round-by-round data for charts
+            if res.get("constraints"):
+                entry["constraints"] = res["constraints"]
             alts = int(q.get("alternates", 0))
             if alts:
-                recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts))
+                recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts),
+                                             constraints=cons, cand_tags=ctags)
                 entry["alternates"] = [w for w in recount["winners"]
                                        if w not in res["winners"]]
         elif typ == "multi":
@@ -1996,6 +2048,13 @@ VERIFY_README = """HOW TO INDEPENDENTLY VERIFY THESE RESULTS
 5. After certification, the close-out export also publishes a tamper-evident
    hash chain over every ballot record (tools/build_chain.py, checked by
    tools/verify.py).
+
+6. QUOTA-CONSTRAINED contests (leadership diversity requirements): plain
+   OpaVote/OpenSTV cannot apply the constraints — recount those with the
+   shipped tabulator, passing the candidate tags and constraints recorded in
+   results.json, or verify by inspection: the stage log names every
+   quota-driven exclusion/guard, and the unconstrained recount of the same
+   .blt shows exactly how the quota changed the outcome.
 """
 
 

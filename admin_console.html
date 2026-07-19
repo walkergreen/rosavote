@@ -221,6 +221,7 @@
           <button class="btn ghost sm" data-preset="referendum">+ Referendum</button>
           <button class="btn ghost sm" data-preset="officer">+ Officer election</button>
           <button class="btn ghost sm" data-preset="delegates">+ Delegate election</button>
+          <button class="btn ghost sm" data-preset="leadership">+ Leadership w/ quotas</button>
           <button class="btn ghost sm" data-preset="feedback">+ Free-text</button>
           <button class="btn ghost sm" data-preset="pledges">+ Multi-select</button>
         </div>
@@ -310,6 +311,10 @@
         <label style="margin-top:10px">BLT text (editable — header: <code>candidates seats</code>;
         ballots: <code>weight rank1 rank2 … 0</code>; then <code>0</code>, quoted names, quoted title)</label>
         <textarea id="count-blt" style="min-height:200px" placeholder="4 2&#10;1 1 2 0&#10;1 2 0&#10;0&#10;&quot;Ana Reyes&quot;&#10;&quot;Ben Katz&quot;&#10;&quot;Cora Lee&quot;&#10;&quot;Dev Malik&quot;&#10;&quot;My contest&quot;"></textarea>
+        <details style="margin-top:10px"><summary style="cursor:pointer;font-size:.8rem;font-weight:700;color:var(--dsa)">Advanced — quota constraints (leadership elections)</summary>
+        <label>Constraints JSON: <code>{"constraints":[{"tag":"cis_man","max":13,"label":"…"}], "cand_tags":{"1":["cis_man"]}}</code> (candidate numbers are 1-based BLT order)</label>
+        <textarea id="count-constraints" style="min-height:70px" placeholder='{"constraints":[{"tag":"cis_man","max":13}],"cand_tags":{"1":["cis_man"],"2":["cis_man"]}}'></textarea>
+        </details>
         <button class="btn sm" id="count-run" style="margin-top:10px">Run count</button>
         <div id="count-view" style="margin-top:10px"></div>
         <div id="count-msg"></div>
@@ -574,6 +579,14 @@ var PRESETS = {
     text:["Ranked choice, counted by Scottish STV. Secret ballot."],
     options:[{id:"CAND1",name:"Candidate One"},{id:"CAND2",name:"Candidate Two"},
              {id:"CAND3",name:"Candidate Three"}]},
+  leadership: {key:"leadership_N", type:"ranked", label:"Leadership election — ranked choice, quota requirements",
+    title:"Elect the committee", seats:16, alternates:0, secret:true, shuffle:true,
+    text:["Scottish STV with quota requirements (constrained count): candidate tags drive diversity minimums/maximums, enforced during the count. Edit tags + constraints to your body's rules."],
+    options:[{id:"CAND1",name:"Candidate One",tags:["cis_man","white"]},
+             {id:"CAND2",name:"Candidate Two",tags:["marginalized"]},
+             {id:"CAND3",name:"Candidate Three",tags:["white"]}],
+    constraints:[{tag:"cis_man",max:13,label:"No more than 13 cis men"},
+                 {tag:"marginalized",min:8,label:"At least 8 members of a nationally marginalized race or ethnicity"}]},
   delegates: {key:"delegates_N", type:"ranked", label:"Convention delegates — ranked choice",
     title:"Elect N delegates + N alternates", seats:2, alternates:1,
     secret:true, delegate:true, shuffle:true,
@@ -769,6 +782,13 @@ function loadResults(live){
       } else if(q.type==="ranked"){
         html += "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
         if(q.alternates) html += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
+        if(q.constraints && q.constraints.length){
+          html += "<br/><b>Quota requirements:</b> " + q.constraints.map(function(cn){
+            var bound = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+            var okc = ("max" in cn) ? (cn.elected <= cn.max) : (cn.elected >= cn.min);
+            return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc ? "✓" : "✗ VIOLATED");
+          }).join(" · ");
+        }
         html += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+"</small>";
         html += stvChart(q);
       } else if(q.type==="multi"){
@@ -952,7 +972,13 @@ $("count-run").onclick = function(){
   var blt = $("count-blt").value;
   if(!blt.trim()){ msg("count-msg","err","Paste or load a BLT file first."); return; }
   msg("count-msg","warn","Counting…");
-  api("/admin/api/count_blt", {method:"POST", body: JSON.stringify({blt: blt})}).then(function(r){
+  var payload = {blt: blt};
+  var ctext = $("count-constraints").value.trim();
+  if(ctext){
+    try { var cj = JSON.parse(ctext); payload.constraints = cj.constraints; payload.cand_tags = cj.cand_tags; }
+    catch(e){ msg("count-msg","err","Constraints JSON doesn't parse: "+e.message); return; }
+  }
+  api("/admin/api/count_blt", {method:"POST", body: JSON.stringify(payload)}).then(function(r){
     if(r.status!==200){ $("count-view").innerHTML=""; msg("count-msg","err",(r.body.message||JSON.stringify(r.body))); return; }
     msg("count-msg","","");
     var d = r.body;
@@ -961,6 +987,11 @@ $("count-run").onclick = function(){
       "<div class='provrow'><b>"+esc(d.title||"Manual count")+"</b><div class='fields'>"+
       "<b>Elected ("+d.seats+" seat"+(d.seats===1?"":"s")+"):</b> "+esc((d.winners||[]).join(", ")||"—")+
       "<br/><small>"+esc(d.method)+" · "+d.valid_ballots+" valid ballots · quota "+d.quota+"</small>"+
+      ((d.constraints&&d.constraints.length) ? "<br/><b>Quota requirements:</b> "+d.constraints.map(function(cn){
+        var bound = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+        var okc = ("max" in cn) ? (cn.elected <= cn.max) : (cn.elected >= cn.min);
+        return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc?"✓":"✗");
+      }).join(" · ") : "")+
       stvChart(pseudo)+"</div></div>";
   });
 };
