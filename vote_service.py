@@ -825,6 +825,15 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
+      <p style="margin-top:14px;margin-bottom:4px"><b>Try it now &mdash; demo admin token:</b><br/>
+      <code class="tc">DEMO-ADMIN-TOKEN-2026</code></p>
+      <p class="fine" style="margin-top:6px">Sign in with this token to explore the console as a
+      <b>chapter admin of the Demo Sandbox poll only</b> &mdash; view its voters and
+      turnout, adjudicate its provisionals, void &amp; reissue its ballots, see its
+      results, and use the manual BLT count workbench. It cannot build elections,
+      import rolls, set vote weights, or touch any real poll. The sandbox is shared
+      and public, so expect other people's fingerprints; its matching
+      <b>voting</b> test code is <code class="tc" style="font-size:.8rem">TEST-SANDBOX-2026-DEMO</code>.</p>
       <details style="margin-top:12px">
         <summary>How to get access</summary>
         <div class="dbody">
@@ -1493,6 +1502,61 @@ ADMIN_CONSOLE = open(os.path.join(os.path.dirname(__file__), "admin_console.html
 def admin_console_page():
     """Static console shell — every API it calls is token-gated."""
     return Response(ADMIN_CONSOLE, mimetype="text/html")
+
+
+@app.post("/admin/api/admins")
+def admin_mint_admin():
+    """Mint a scoped admin token (root only, audited). Body: {name, role:
+    national|chapter, polls: [...], token?: <plaintext ≥12 chars — otherwise
+    generated>}. The plaintext is returned ONCE; only its hash is stored."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()
+    role = str(data.get("role") or "chapter").strip()
+    polls = [str(p) for p in (data.get("polls") or [])]
+    token = str(data.get("token") or "") or secrets.token_urlsafe(24)
+    if not name or role not in ("national", "chapter") or len(token) < 12 or len(token) > 128:
+        return jsonify({"error": "bad_request",
+                        "message": "name, role national|chapter, and (optional) "
+                                   "token ≥12 chars required"}), 400
+    if role == "chapter" and not polls:
+        return jsonify({"error": "bad_request", "message": "chapter role needs polls"}), 400
+    db.collection(ADMINS_COLL).document(code_hash(token)).set({
+        "name": name, "role": role, "polls": polls, "active": True,
+        "minted_by": ident["name"],
+    })
+    _audit("config", "admin_minted", ident["name"], admin_name=name,
+           role=role, polls=polls)
+    return jsonify({"ok": True, "name": name, "role": role, "polls": polls,
+                    "token": token}), 200   # shown once — never stored in plaintext
+
+
+@app.post("/admin/api/count_blt")
+def admin_count_blt():
+    """Manual count workbench: POST a raw .blt file body ({"blt": "..."}),
+    get the full Scottish STV round-by-round result. Touches no election
+    data — any signed-in admin (including the public demo token) may use it
+    to verify a downloaded ballot file or experiment with edits."""
+    ident = require_admin()
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    blt = str((request.get_json(silent=True) or {}).get("blt") or "")
+    if not blt.strip():
+        return jsonify({"error": "bad_request", "message": "blt text required"}), 400
+    if len(blt) > 2_000_000:
+        return jsonify({"error": "too_large", "message": "cap is 2 MB"}), 400
+    import stv_tabulate
+    try:
+        res = stv_tabulate.count(blt)
+    except Exception as e:
+        return jsonify({"error": "parse_or_count_failed",
+                        "message": f"{type(e).__name__}: check the BLT format "
+                                   "(header 'candidates seats'; ballot lines "
+                                   "'weight rank1 rank2 … 0'; a lone 0; quoted "
+                                   "names; quoted title)"}), 400
+    return jsonify(res), 200
 
 
 @app.get("/admin/api/whoami")

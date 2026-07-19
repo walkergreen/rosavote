@@ -537,4 +537,28 @@ r = c.get("/admin/api/polls/special_ref/blt/measure?live=1", headers=hdr)
 ok(r.status_code == 200 and r.get_data(as_text=True).startswith("2 1\n"),
    "yesno exports as a 1-seat BLT")
 
+# ---- mint scoped admin tokens via API; manual BLT count workbench ----
+r = c.post("/admin/api/admins", headers=hdr, json={
+    "name": "Public demo", "role": "chapter", "polls": ["special_ref"],
+    "token": "DEMO-ADMIN-TOKEN-2026"})
+ok(r.status_code == 200 and r.get_json()["token"] == "DEMO-ADMIN-TOKEN-2026",
+   "root mints scoped admin token (plaintext returned once)")
+demo_hdr = {"X-Admin-Token": "DEMO-ADMIN-TOKEN-2026"}
+r = c.get("/admin/api/whoami", headers=demo_hdr)
+ok(r.status_code == 200 and r.get_json()["role"] == "chapter"
+   and r.get_json()["polls"] == ["special_ref"], "minted token works, scoped")
+ok(c.post("/admin/api/admins", headers=demo_hdr, json={
+    "name": "x", "role": "national"}).status_code == 403, "minting is root-only")
+ok(c.post("/admin/api/polls/special_ref", headers=demo_hdr,
+          json={"name": "x"}).status_code == 403, "demo token cannot build elections")
+
+blt_sample = '3 1\n2 1 2 0\n1 2 0\n1 3 0\n0\n"A"\n"B"\n"C"\n"t"\n'
+r = c.post("/admin/api/count_blt", headers=demo_hdr, json={"blt": blt_sample})
+ok(r.status_code == 200 and r.get_json()["winners"] == ["A"]
+   and r.get_json()["valid_ballots"] == 4, "manual BLT count runs (weighted)")
+ok(c.post("/admin/api/count_blt", headers=demo_hdr,
+          json={"blt": "not a blt"}).status_code == 400, "malformed BLT rejected cleanly")
+ok(c.post("/admin/api/count_blt", json={"blt": blt_sample}).status_code == 403,
+   "count workbench requires a signed-in admin")
+
 print(f"SMOKE TEST: all {passed} checks passed")

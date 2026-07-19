@@ -268,6 +268,20 @@
             every weight change is in the audit log.</p>
           </div>
         </details>
+        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+        <p class="kicker">Manual count workbench</p>
+        <p>Load any <b>.blt</b> file (e.g. one downloaded above, or from another
+        system), run a Scottish STV count, and see the same round-by-round
+        chart. The ballot text is editable — tweak ballots, weights, or the
+        seat count in the header and <b>rerun</b> to explore how the outcome
+        responds. Nothing here touches stored election data.</p>
+        <input type="file" id="count-file" accept=".blt,.txt,text/plain"/>
+        <label style="margin-top:10px">BLT text (editable — header: <code>candidates seats</code>;
+        ballots: <code>weight rank1 rank2 … 0</code>; then <code>0</code>, quoted names, quoted title)</label>
+        <textarea id="count-blt" style="min-height:160px" placeholder="4 2&#10;1 1 2 0&#10;1 2 0&#10;0&#10;&quot;Ana Reyes&quot;&#10;&quot;Ben Katz&quot;&#10;&quot;Cora Lee&quot;&#10;&quot;Dev Malik&quot;&#10;&quot;My contest&quot;"></textarea>
+        <button class="btn sm" id="count-run" style="margin-top:10px">Run count</button>
+        <div id="count-view" style="margin-top:10px"></div>
+        <div id="count-msg"></div>
       </div>
     </div>
 
@@ -763,6 +777,30 @@ $("blt-refresh").onclick = function(){
       btns.appendChild(b2);
     }
     row.appendChild(btns); el.appendChild(row);
+  });
+};
+
+// ---- manual count workbench ----
+$("count-file").addEventListener("change", function(){
+  var f = this.files[0]; if(!f) return;
+  var reader = new FileReader();
+  reader.onload = function(){ $("count-blt").value = String(reader.result); msg("count-msg","",""); };
+  reader.readAsText(f);
+});
+$("count-run").onclick = function(){
+  var blt = $("count-blt").value;
+  if(!blt.trim()){ msg("count-msg","err","Paste or load a BLT file first."); return; }
+  msg("count-msg","warn","Counting…");
+  api("/admin/api/count_blt", {method:"POST", body: JSON.stringify({blt: blt})}).then(function(r){
+    if(r.status!==200){ $("count-view").innerHTML=""; msg("count-msg","err",(r.body.message||JSON.stringify(r.body))); return; }
+    msg("count-msg","","");
+    var d = r.body;
+    var pseudo = {stages: d.stages, quota: d.quota, seats: d.seats, winners: d.winners};
+    $("count-view").innerHTML =
+      "<div class='provrow'><b>"+esc(d.title||"Manual count")+"</b><div class='fields'>"+
+      "<b>Elected ("+d.seats+" seat"+(d.seats===1?"":"s")+"):</b> "+esc((d.winners||[]).join(", ")||"—")+
+      "<br/><small>"+esc(d.method)+" · "+d.valid_ballots+" valid ballots · quota "+d.quota+"</small>"+
+      stvChart(pseudo)+"</div></div>";
   });
 };
 
