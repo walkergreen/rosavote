@@ -8,9 +8,12 @@ Prototype status: deployed publicly for review; NOT a live election.
 ## Run / deploy / test
 
 ```sh
-# deploy (from this directory's parent):
-gcloud run deploy member-ballot-v2 --source ballot-v2 --region us-east1 \
-  --allow-unauthenticated [--set-env-vars ADMIN_TOKEN=<hex>]
+# deploy (from this directory's parent) — current service is member-ballot-v3:
+gcloud run deploy member-ballot-v3 --source ballot-v2 --region us-east1 \
+  --allow-unauthenticated --min-instances 0 --max-instances 20 \
+  --set-secrets ADMIN_TOKEN=ballot-admin-token:latest
+# live: https://member-ballot-v3-62155002849.us-east1.run.app
+# (member-ballot-v2 + older services are previous prototypes — deletion candidates)
 
 # full offline smoke test (no GCP credentials needed — stubs Firestore):
 python3 tools/smoke_test.py       # use .venv/bin/python if flask isn't global
@@ -156,8 +159,13 @@ deletion).
    coverage) + `ak_user_fields_pivoted.chapter` (241 chapters; matched to
    polls by `roll_chapter`/`name`). Open: a real `--write` run needs ADC
    (`gcloud auth application-default login`, or run from a service account).
-3. Cloud Scheduler close-out automation; Cloud Armor; min/max instances;
-   Secret Manager; billing alerts.
+3. ~~Ops hardening~~ MOSTLY DONE (2026-07-19): deployed member-ballot-v3
+   (max-instances 20, ADMIN_TOKEN via Secret Manager secret
+   `ballot-admin-token`), Cloud Scheduler job `ballot-closeout` (every 15
+   min → /admin/api/cron/closeout), $25/mo budget w/ 50/90/100% alerts.
+   Still open: Cloud Armor needs an external HTTPS LB + domain
+   (vote.dsausa.org) — decision pending; heavy close-out export (chain/BLT
+   to GCS) still manual via tools/.
 4. Human screen-reader pass (VoiceOver/TalkBack/NVDA) before any public WCAG
    conformance claim — see tools/accessibility_results.md.
 5. Resolve wgreen@dsausa.org "Gaia id not found" org-access issue (blocks

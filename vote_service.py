@@ -1285,7 +1285,11 @@ def admin_void(poll_id):
 
 
 @app.get("/healthz")
+@app.get("/health")
 def healthz():
+    # note: Google's frontend intercepts /healthz on run.app URLs (returns
+    # its own 404), so external checks must use /health; /healthz still
+    # works for container-internal probes.
     return "ok", 200
 
 
