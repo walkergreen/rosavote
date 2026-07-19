@@ -674,6 +674,106 @@ def voted(poll_id):
 RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
 
 
+_PUB_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — Results — DSA Vote</title>
+<style>*{{box-sizing:border-box}}body{{font:16px/1.5 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
+.banner{{background:#dd1111;color:#fff5e5;padding:14px 18px;font-family:"Arial Narrow",sans-serif;
+font-weight:bold;text-transform:uppercase;font-size:1.4rem}}.banner small{{display:block;font-size:.85rem;opacity:.9}}
+main{{max-width:640px;margin:0 auto;padding:20px 16px 60px}}
+.card{{background:#fff;border:1px solid #000;box-shadow:5px 5px 0 0 #000;margin:0 0 18px;padding:14px}}
+h2{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:0 0 8px;font-size:1.15rem}}
+.row{{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:.9rem;font-family:system-ui,sans-serif}}
+.nm{{flex:0 0 170px;text-align:right;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.tr{{flex:1;position:relative;height:16px;background:#fff5e5;border:1px solid rgba(0,0,0,.25)}}
+.fl{{position:absolute;left:0;top:0;bottom:0;background:#dd1111;border-radius:0 4px 4px 0}}
+.fl.b{{background:#2a78d6}}.fl.g{{background:#767676}}
+.vl{{flex:0 0 60px;font-variant-numeric:tabular-nums}}
+.win{{font-family:system-ui,sans-serif;font-size:.95rem}}.k{{font-family:system-ui,sans-serif;
+font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#dd1111;font-weight:700}}
+footer{{text-align:center;font:12px system-ui,sans-serif;color:rgba(0,0,0,.55);padding:16px}}
+a{{color:#dd1111}}</style></head><body>
+<div class="banner">🌹 DSA Vote<small>{title} — Official Results</small></div>
+<main>{body}</main>
+<footer><b>DSA Vote</b> · results certified by the body conducting the election ·
+<a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br/>Built with 🌹 by Walker Green</footer>
+</body></html>"""
+
+
+def _pub_bar(name, v, vmax, cls=""):
+    pct = round(v / vmax * 100, 1) if vmax else 0
+    return (f'<div class="row"><span class="nm">{_esc(name)}</span>'
+            f'<span class="tr"><span class="fl {cls}" style="width:{pct}%"></span></span>'
+            f'<span class="vl">{v:g}</span></div>')
+
+
+@app.get("/p/<poll_id>/results")
+def public_results(poll_id):
+    """PUBLIC, shareable results page — live only after the poll is
+    finalized AND its admins chose to publish (each chapter decides its own
+    publication). Shows outcomes and aggregate counts, never any voter's
+    ballot and never per-ballot secret content."""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return "Unknown poll.", 404
+    if not (cfg.get("finalized") and cfg.get("results_published")):
+        return Response(_PUB_SHELL.format(
+            title=_esc(cfg.get("name") or poll_id),
+            body='<div class="card"><h2>Results not published</h2>'
+                 '<p class="win">This election\'s results have not been published '
+                 'by its administrators (or voting is still under way). Check '
+                 'back later, or contact your chapter.</p></div>'),
+            mimetype="text/html")
+    res = compute_results(poll_id, cfg)
+    cards = []
+    for q in res["questions"]:
+        inner = ""
+        if q["type"] == "yesno":
+            c = q["counts"]
+            vmax = max(c["YES"], c["NO"], c["ABSTAIN"], 1)
+            inner = (f'<p class="win"><b>{_esc(q["result"])}</b> '
+                     '<small>(abstentions excluded)</small></p>'
+                     + _pub_bar("Yes", c["YES"], vmax) + _pub_bar("No", c["NO"], vmax, "b")
+                     + _pub_bar("Abstain", c["ABSTAIN"], vmax, "g"))
+        elif q["type"] == "ranked":
+            inner = ('<p class="win"><b>Elected'
+                     + (f' ({q["seats"]} seats)' if q["seats"] > 1 else "") + ":</b> "
+                     + _esc(", ".join(q["winners"]) or "—") + "</p>")
+            if q.get("alternates"):
+                inner += ('<p class="win"><b>Alternates:</b> '
+                          + _esc(", ".join(q["alternates"])) + "</p>")
+            if not q.get("group_partial"):
+                for cn in (q.get("constraints") or []):
+                    bound = f"max {cn['max']}" if "max" in cn else f"min {cn['min']}"
+                    inner += ('<p class="win k">Quota requirement met: '
+                              + _esc(cn.get("label") or f"{bound} {cn['tag']}")
+                              + f' — {cn["elected"]} elected'
+                              + (' (across the full body)' if q.get("quota_group") else '')
+                              + '</p>')
+            fp = q.get("first_prefs") or {}
+            vmax = max(list(fp.values()) + [1])
+            inner += '<p class="k">First preferences</p>' + "".join(
+                _pub_bar(n, v, vmax, "" if n in q["winners"] else "b")
+                for n, v in sorted(fp.items(), key=lambda kv: -kv[1]))
+            inner += (f'<p class="win"><small>Scottish STV · {q["valid_ballots"]} valid '
+                      f'ballots · quota {q["quota"]} · full round-by-round record held '
+                      'by election administration</small></p>')
+        elif q["type"] == "multi":
+            vmax = max(list(q["counts"].values()) + [1])
+            inner = "".join(_pub_bar(n, v, vmax) for n, v in q["counts"].items())
+        elif q["type"] == "text":
+            inner = (f'<p class="win">{q["responses"]} written response(s) received '
+                     '(content reviewed by election administration).</p>')
+        cards.append(f'<div class="card"><h2>{_esc(q["title"])}</h2>{inner}</div>')
+    meta = (f'<div class="card"><p class="win">{res["ballots_counted"]} ballots counted'
+            + (" · weighted election (ballots count at each voter's assigned weight)"
+               if res.get("weighted") else "")
+            + '. Voters can confirm their own ballot was recorded at any time with '
+            'their receipt code.</p></div>')
+    return Response(_PUB_SHELL.format(title=_esc(res.get("name") or poll_id),
+                                      body=meta + "".join(cards)),
+                    mimetype="text/html")
+
+
 @app.get("/p/<poll_id>/verify")
 def verify_receipt(poll_id):
     """PUBLIC receipt check — a voter whose browser/VPN made casting feel
@@ -1996,6 +2096,65 @@ def admin_ballot_lookup(poll_id):
         "record_hash": d.get("record_hash"),
         "secret_ballot_recorded": d.get("receipt") in secret_receipts,
     } for d in matches]}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/recount_preview")
+def admin_recount_preview(poll_id):
+    """Preview a ranked contest under a DIFFERENT counting method
+    (plurality/SNTV, approval, borda, sequential IRV) — comparison only,
+    never certification. Same gating as results."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    data = request.get_json(silent=True) or {}
+    if not cfg.get("finalized"):
+        if not (data.get("live") and ident["role"] == "national"):
+            return jsonify({"error": "not_finalized"}), 409
+        _audit(poll_id, "live_recount_preview", ident["name"])
+    import stv_tabulate
+    method = str(data.get("method") or "").strip().lower()
+    if method not in stv_tabulate.ALT_METHODS:
+        return jsonify({"error": "bad_method",
+                        "message": f"method must be one of {stv_tabulate.ALT_METHODS}"}), 400
+    qkey = str(data.get("question") or "").strip()
+    q = next((x for x in poll_questions(cfg)
+              if x["key"] == qkey and x["type"] == "ranked"), None)
+    if not q:
+        return jsonify({"error": "not_a_ranked_question"}), 404
+    main_rows, _, secret_rows = _tally_rows(poll_id)
+    rows = secret_rows if q.get("secret") else main_rows
+    blt = _blt_text(rows, qkey, q["options"], int(q.get("seats", 1)),
+                    title=q["title"])
+    res = stv_tabulate.count_alternative(blt, method)
+    res["official_method"] = "Scottish STV"
+    return jsonify(res), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/publish")
+def admin_publish_results(poll_id):
+    """Publish (or unpublish) the poll's PUBLIC results page at
+    /p/<poll>/results. Decided policy: each chapter decides its own
+    publication — so any admin of the poll may flip this, audited.
+    Requires a finalized poll."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    if not cfg.get("finalized"):
+        return jsonify({"error": "not_finalized",
+                        "message": "Results publish after the poll is finalized."}), 409
+    publish = bool((request.get_json(silent=True) or {}).get("publish", True))
+    db.collection(CONFIG_COLL).document(poll_id).set(
+        cfg_to_doc(dict(cfg, results_published=publish)))
+    _audit(poll_id, "results_publish" if publish else "results_unpublish", ident["name"])
+    load_polls(force=True)
+    return jsonify({"ok": True, "published": publish,
+                    "url": f"/p/{poll_id}/results"}), 200
 
 
 @app.get("/admin/api/polls/<poll_id>/blt/<qkey>")

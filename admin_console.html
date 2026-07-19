@@ -270,6 +270,7 @@
         <div class="row">
           <button class="btn dark sm" id="blt-refresh" style="margin-top:0">List ballot files</button>
           <button class="btn sm" id="export-zip-btn">Download results .zip</button>
+          <button class="btn dark sm" id="publish-btn">Publish / unpublish public results page</button>
         </div>
         <details class="vk-how" style="margin-top:12px;border:1px solid rgba(0,0,0,.25);background:var(--cream);font-size:.82rem">
           <summary style="cursor:pointer;padding:9px 11px;font-weight:700;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dsa)">How to independently verify results</summary>
@@ -768,6 +769,7 @@ $("import-btn").onclick = function(){
 // ---- results ----
 function loadResults(live){
   var pid = $("results-poll").value;
+  window.RESULTS_PID = pid;
   msg("results-msg","warn","Counting…");
   api("/admin/api/polls/"+pid+"/results"+(live?"?live=1":"")).then(function(r){
     if(r.status!==200){
@@ -800,6 +802,13 @@ function loadResults(live){
           html += "<div id='uv-"+q.key+"' style='display:none'><p class='kicker'>Comparison — quota requirements NOT applied (not the official result)</p>"+rankedBlock(uq)+"</div>";
           html += "<button class='btn ghost sm' onclick=\"toggleQuota('"+q.key+"')\" id='tq-"+q.key+"'>Compare: without quota requirements</button>";
         }
+        html += "<div style='margin-top:8px'><select id='mp-"+q.key+"' style='width:auto;display:inline-block;padding:6px'>"+
+          "<option value='plurality'>Plurality / SNTV</option>"+
+          "<option value='irv'>Sequential IRV (SF-style RCV)</option>"+
+          "<option value='approval'>Approval voting</option>"+
+          "<option value='borda'>Borda count</option></select> "+
+          "<button class='btn ghost sm' onclick=\"methodPreview('"+q.key+"')\">Recount preview under this method</button></div>"+
+          "<div id='mpv-"+q.key+"'></div>";
       } else if(q.type==="multi"){
         html += barChart(Object.keys(q.counts).map(function(n){ return [n, q.counts[n], "f-cont"]; }));
       } else if(q.type==="text"){
@@ -827,6 +836,20 @@ function rankedBlock(q){
   h += stvChart(q);
   return h;
 }
+window.methodPreview = function(k){
+  var pid = window.RESULTS_PID, m = $("mp-"+k).value;
+  var body = {question: k, method: m};
+  if(!POLLS[pid].finalized) body.live = 1;
+  $("mpv-"+k).innerHTML = "<p><small>Counting under "+esc(m)+"…</small></p>";
+  api("/admin/api/polls/"+pid+"/recount_preview", {method:"POST", body: JSON.stringify(body)}).then(function(r){
+    if(r.status!==200){ $("mpv-"+k).innerHTML = "<div class='msg err'>"+esc(r.body.message||r.body.error||"Preview failed")+"</div>"; return; }
+    var d = r.body;
+    var rows = Object.keys(d.scores).sort(function(a,b){ return d.scores[b]-d.scores[a]; })
+      .map(function(n){ return [n+(d.winners.indexOf(n)!==-1?" ✓":""), d.scores[n], d.winners.indexOf(n)!==-1?"f-elected":"f-cont"]; });
+    $("mpv-"+k).innerHTML = "<div class='msg warn' style='margin-top:8px'><b>PREVIEW — not the official method.</b> "+esc(d.note)+
+      "<br/><b>Winners under this method:</b> "+esc(d.winners.join(", ")||"—")+"</div>"+barChart(rows);
+  });
+};
 window.toggleQuota = function(k){
   var cv = $("cv-"+k), uv = $("uv-"+k), b = $("tq-"+k);
   var showU = uv.style.display === "none";
@@ -946,6 +969,19 @@ function downloadBlt(pid, key, recount){
   });
 }
 $("export-zip-btn").onclick = function(){ downloadZip($("results-poll").value); };
+$("publish-btn").onclick = function(){
+  var pid = $("results-poll").value, c = POLLS[pid];
+  var pub = !c.results_published;
+  if(!confirm(pub ? "PUBLISH the public results page for "+c.name+"?\nAnyone with the link "+location.origin+"/p/"+pid+"/results can view outcomes and aggregate counts (never individual ballots)."
+                  : "UNPUBLISH the public results page for "+c.name+"?")) return;
+  api("/admin/api/polls/"+pid+"/publish", {method:"POST", body: JSON.stringify({publish: pub})}).then(function(r){
+    if(r.status===200){
+      msg("results-msg","okc", pub ? ("Published — share this link with voters:\n"+location.origin+r.body.url)
+                                   : "Public results page unpublished.");
+      loadPolls();
+    } else msg("results-msg","err",(r.body.message||JSON.stringify(r.body)));
+  });
+};
 $("blt-refresh").onclick = function(){
   var pid = $("results-poll").value, c = POLLS[pid];
   var el = $("blt-list");

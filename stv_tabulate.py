@@ -304,6 +304,89 @@ def count(blt_text: str, constraints=None, cand_tags=None,
     return out
 
 
+ALT_METHODS = ("plurality", "approval", "borda", "irv")
+
+
+def count_alternative(blt_text: str, method: str):
+    """PREVIEW counts under other rules — for comparing how an election
+    would have turned out, never for certification:
+      plurality — SNTV: each ballot counts once, for its first choice
+      approval  — every candidate ranked anywhere on a ballot is 'approved'
+      borda     — descending points by rank (m-1, m-2, …, 0)
+      irv       — sequential instant-runoff (San Francisco-style RCV for one
+                  seat; for multi-seat contests winners are elected one at a
+                  time and removed — NOT proportional like STV)"""
+    n_cands, seats, withdrawn, ballots, names, title = parse_blt(blt_text)
+    active = [c for c in range(1, n_cands + 1) if c not in withdrawn]
+    scores = {c: 0 for c in active}
+
+    if method == "plurality":
+        for w, ranks in ballots:
+            rs = [r for r in ranks if r in scores]
+            if rs:
+                scores[rs[0]] += w
+        note = ("Plurality / SNTV: each ballot counts only for its first choice; "
+                "the top vote-getters win. No transfers, not proportional.")
+        winners = sorted(active, key=lambda c: (-scores[c], c))[:seats]
+    elif method == "approval":
+        for w, ranks in ballots:
+            for r in set(r for r in ranks if r in scores):
+                scores[r] += w
+        note = ("Approval preview: every candidate a voter ranked (at any position) "
+                "counts as approved. Ranking order is ignored.")
+        winners = sorted(active, key=lambda c: (-scores[c], c))[:seats]
+    elif method == "borda":
+        m = len(active)
+        for w, ranks in ballots:
+            rs = [r for r in ranks if r in scores]
+            for i, r in enumerate(rs):
+                scores[r] += w * (m - 1 - i)
+        note = (f"Borda count: a first choice is worth {m - 1} points, each lower "
+                "rank one point less; unranked candidates score 0.")
+        winners = sorted(active, key=lambda c: (-scores[c], c))[:seats]
+    elif method == "irv":
+        for w, ranks in ballots:            # display scores = first preferences
+            rs = [r for r in ranks if r in scores]
+            if rs:
+                scores[rs[0]] += w
+        winners = []
+        remaining = set(active)
+        guard = 0
+        while len(winners) < seats and remaining and guard < 200:
+            cont = set(remaining)
+            while guard < 200:
+                guard += 1
+                tallies = {c: 0 for c in cont}
+                total = 0
+                for w, ranks in ballots:
+                    rs = [r for r in ranks if r in cont]
+                    if rs:
+                        tallies[rs[0]] += w
+                        total += w
+                if not total:
+                    break
+                top = max(cont, key=lambda c: (tallies[c], -c))
+                if tallies[top] * 2 > total or len(cont) == 1:
+                    winners.append(top)
+                    remaining.discard(top)
+                    break
+                cont.discard(min(cont, key=lambda c: (tallies[c], c)))
+            else:
+                break
+            if not total:
+                break
+        note = ("Sequential instant-runoff (San Francisco-style RCV): a winner needs a "
+                "majority of continuing ballots, lowest candidates are eliminated one at "
+                "a time; for multiple seats, each winner is removed and the runoff "
+                "repeats. Majoritarian — NOT proportional like STV.")
+    else:
+        raise ValueError(f"unknown method {method!r} (use one of {ALT_METHODS})")
+
+    return {"title": title, "method": method, "note": note, "seats": seats,
+            "winners": [names[c - 1] for c in winners],
+            "scores": {names[c - 1]: scores[c] for c in active}}
+
+
 def print_table(result: dict):
     print(f"\n{result['title']}")
     print(f"Method: {result['method']}  ·  Seats: {result['seats']}  ·  "

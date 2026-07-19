@@ -679,4 +679,37 @@ ok("WITHOUT quota requirements" in
    _zipfile.ZipFile(_io.BytesIO(r.data)).read("results.txt").decode(),
    "results.txt exports both outcomes")
 
+# ---- method recount previews + public published results page ----
+ok(c.post("/admin/api/polls/body_quota_test/publish", headers=hdr,
+          json={"publish": True}).status_code == 409, "publish requires finalize")
+ok("Results not published" in c.get("/p/body_quota_test/results").data.decode(),
+   "public page holds back unpublished results")
+
+DOCS[("config__polls", "special_ref")]["closes_at"] = now - 50
+c.post("/admin/api/cron/closeout", headers=hdr)
+r = c.post("/admin/api/polls/special_ref/recount_preview", headers=hdr,
+           json={"question": "officer", "method": "plurality"})
+ok(r.status_code == 200 and len(r.get_json()["winners"]) == 2
+   and "first choice" in r.get_json()["note"], "plurality recount preview")
+for m in ("irv", "approval", "borda"):
+    ok(c.post("/admin/api/polls/special_ref/recount_preview", headers=hdr,
+              json={"question": "officer", "method": m}).status_code == 200,
+       f"{m} recount preview")
+ok(c.post("/admin/api/polls/special_ref/recount_preview", headers=hdr,
+          json={"question": "officer", "method": "meek"}).status_code == 400,
+   "unknown method rejected")
+
+r = c.post("/admin/api/polls/special_ref/publish", headers=hdr, json={"publish": True})
+ok(r.status_code == 200 and r.get_json()["url"] == "/p/special_ref/results",
+   "finalized poll publishes")
+pub = c.get("/p/special_ref/results").data.decode()
+ok("Official Results" in pub and "Elected" in pub and "mutual aid pantry" in pub,
+   "public results page renders outcomes")
+ok("AK101" not in pub and "receipt" not in pub.lower().replace(
+    "receipt code", ""), "public page leaks no voter identity")
+ok(c.post("/admin/api/polls/special_ref/publish", headers=hdr,
+          json={"publish": False}).status_code == 200
+   and "Results not published" in c.get("/p/special_ref/results").data.decode(),
+   "unpublish takes the page down")
+
 print(f"SMOKE TEST: all {passed} checks passed")
