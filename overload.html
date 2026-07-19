@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One moment — vote not yet recorded</title>
+<style>
+  /* Palette: deep ink + parchment, one solidarity-red accent. Deliberately
+     NOT the near-black/acid-green error-page default. Reads as civic, calm,
+     union-hall — not "server on fire". */
+  :root{
+    --ink:#1b2432;        /* near-navy text */
+    --paper:#f3efe6;      /* warm parchment bg */
+    --paper-edge:#e7e1d3;
+    --accent:#b8352c;     /* muted solidarity red */
+    --muted:#5d6472;      /* secondary text */
+    --line:#d6cfbf;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --ink:#eef1f4; --paper:#161b23; --paper-edge:#1e2531;
+      --accent:#e0655c; --muted:#9aa3b2; --line:#2b333f;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:ui-serif,Georgia,"Times New Roman",serif;
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .card{
+    width:100%;max-width:460px;
+    background:linear-gradient(180deg,var(--paper) 0%,var(--paper-edge) 100%);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:40px 32px 32px;
+    box-shadow:0 1px 0 rgba(255,255,255,.4) inset, 0 12px 40px rgba(0,0,0,.08);
+    text-align:center;
+  }
+  .mark{
+    width:44px;height:44px;margin:0 auto 22px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  /* Slow, calm pulse — signals "working", not "broken". Respects reduced motion. */
+  .dot{
+    width:12px;height:12px;border-radius:50%;
+    background:var(--accent);
+    animation:breathe 2.4s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{transform:scale(.75);opacity:.55}
+    50%{transform:scale(1.15);opacity:1}
+  }
+  @media (prefers-reduced-motion:reduce){ .dot{animation:none} }
+
+  h1{
+    font-size:1.5rem;font-weight:600;margin:0 0 12px;
+    letter-spacing:-.01em;
+  }
+  .lead{margin:0 0 8px;font-size:1.05rem}
+  .assurance{
+    margin:20px auto 0;padding:14px 16px;max-width:380px;
+    background:transparent;border:1px dashed var(--line);border-radius:10px;
+    color:var(--muted);font-size:.95rem;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  .assurance strong{color:var(--ink);font-weight:600}
+  .btn{
+    display:inline-block;margin-top:26px;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font-size:1rem;font-weight:600;
+    background:var(--accent);color:#fff;
+    border:none;border-radius:10px;
+    padding:14px 28px;cursor:pointer;
+    text-decoration:none;
+    min-width:180px;
+    transition:transform .06s ease, filter .15s ease;
+  }
+  .btn:hover{filter:brightness(1.05)}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+  .meta{
+    margin-top:22px;font-size:.8rem;color:var(--muted);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  .countdown{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+  <main class="card" role="main">
+    <div class="mark" aria-hidden="true"><span class="dot"></span></div>
+
+    <h1>Just a moment</h1>
+    <p class="lead">A lot of members are voting right now, so the page is busy.</p>
+
+    <div class="assurance">
+      <strong>Your vote has not been submitted yet</strong>, and nothing has been
+      lost. Your voting link still works — please try again in a few seconds.
+    </div>
+
+    <a class="btn" id="retry" href="javascript:location.reload()">
+      Try again<span id="cd" class="countdown"></span>
+    </a>
+
+    <p class="meta">If this keeps happening, wait a minute and reopen the link
+      from your text message or email.</p>
+  </main>
+
+<script>
+  // Gentle auto-retry with a visible countdown. Backs off if it keeps failing
+  // so we don't add load to an already-busy service. No data is sent from here;
+  // this page only reloads the voter's own link.
+  (function(){
+    var base = 6;                     // seconds
+    var attempt = Number(sessionStorage.getItem('ref_retry')||0);
+    var wait = Math.min(base * Math.pow(1.6, attempt), 45); // capped backoff
+    wait = Math.round(wait);
+    var left = wait;
+    var cd = document.getElementById('cd');
+    var btn = document.getElementById('retry');
+
+    function tick(){
+      cd.textContent = ' (' + left + 's)';
+      if(left<=0){
+        sessionStorage.setItem('ref_retry', String(attempt+1));
+        location.reload();
+        return;
+      }
+      left--; setTimeout(tick, 1000);
+    }
+    // Respect reduced-motion / prefers users tapping themselves: still auto-retry,
+    // but the button is always available immediately.
+    btn.addEventListener('click', function(){
+      sessionStorage.setItem('ref_retry', String(attempt+1));
+    });
+    tick();
+
+    // Clear the backoff counter once the real page loads successfully elsewhere.
+    window.addEventListener('pageshow', function(){/* no-op placeholder */});
+  })();
+</script>
+</body>
+</html>

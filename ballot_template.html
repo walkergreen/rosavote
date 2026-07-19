@@ -1,0 +1,1175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>__CHAPTER_NAME__ &mdash; DSA Chapter Member Ballot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,500;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  /* ==========================================================================
+     Brand tokens — poster aesthetic carried over from the NYC-DSA ballot-lookup
+     site: red on cream newsprint, squared corners, hard offset shadows,
+     condensed ALL-CAPS display type, serif body.
+     ========================================================================== */
+  :root {
+    --color-dsa: #dd1111;
+    --color-dsa-bright: #ef3232;
+    --color-cream: #fff5e5;
+    --color-tan: #ffe1b2;
+    --color-ink: #000000;
+    --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --font-body: "Alegreya", Georgia, "Times New Roman", serif;
+    --font-ui: "Barlow", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-body);
+    background: var(--color-cream);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    margin: 0;
+  }
+
+  /* ---- top band ---- */
+  .vk-band {
+    background: var(--color-dsa);
+    color: var(--color-cream);
+    padding: 14px 16px 12px;
+  }
+  .vk-band-inner {
+    max-width: 430px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .vk-wordmark {
+    font-family: var(--font-display);
+    font-weight: 900;
+    text-transform: uppercase;
+    font-size: 1.9rem;
+    line-height: 0.88;
+  }
+  .vk-wordmark small {
+    display: block;
+    font-size: 0.92rem;
+    font-weight: 800;
+    opacity: 0.88;
+    letter-spacing: 0.02em;
+    margin-top: 2px;
+  }
+  .vk-rose {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 2px solid var(--color-cream);
+    padding: 5px 8px 4px;
+    text-align: center;
+    line-height: 1.05;
+    flex: none;
+  }
+
+  /* ---- page frame ---- */
+  main {
+    flex: 1;
+    width: 100%;
+    max-width: 430px;
+    margin: 0 auto;
+    padding: 18px 14px 40px;
+  }
+
+  /* ballot timing-mark bars */
+  .ballot-marks {
+    background-color: var(--color-cream);
+    background-image: repeating-linear-gradient(to right, #dd1111 0 7px, transparent 7px 18px);
+    background-position: top;
+    background-size: 100% 7px;
+    background-repeat: repeat-x;
+  }
+
+  .vk-card {
+    background: #fff;
+    border: 1px solid var(--color-ink);
+    box-shadow: 6px 6px 0 0 var(--color-ink);
+    padding: 0;
+    margin-top: 10px;
+  }
+  .vk-card-band {
+    background: var(--color-dsa);
+    color: #fff;
+    padding: 10px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .vk-card-band h2 {
+    font-size: 1.45rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+  .vk-step {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.92;
+    text-align: right;
+    line-height: 1.2;
+    flex: none;
+  }
+  .vk-card-body { padding: 16px 14px 18px; }
+
+  .vk-kicker {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-dsa);
+    margin: 0 0 6px;
+  }
+  .vk-lede {
+    font-family: var(--font-body);
+    font-size: 1rem;
+    line-height: 1.45;
+    margin: 0 0 14px;
+    color: rgba(0,0,0,0.82);
+  }
+  .vk-lede b { color: var(--color-ink); }
+
+  /* ---- inputs & buttons ---- */
+  .vk-label {
+    display: block;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.6);
+    margin: 0 0 5px;
+  }
+  .vk-input {
+    width: 100%;
+    padding: 12px 12px;
+    font-family: var(--font-ui);
+    font-size: 16px; /* >=16px: iOS Safari auto-zooms below this */
+    color: var(--color-ink);
+    background: #fff;
+    border: 1px solid var(--color-ink);
+    border-radius: 0;
+    -webkit-appearance: none;
+  }
+  .vk-input::placeholder { color: rgba(0,0,0,0.4); }
+  .vk-input:focus { outline: 2px solid var(--color-dsa); outline-offset: 0; }
+  /* one-time-code entry: big, centered, spaced digits */
+  .vk-input--code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: 0.45em;
+    text-align: center;
+    padding: 12px 6px 12px 0.45em; /* left pad offsets the trailing letter-space */
+  }
+
+  .vk-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 52px;
+    margin-top: 14px;
+    padding: 12px 16px;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.3rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-cream);
+    background: var(--color-dsa);
+    border: 1px solid var(--color-ink);
+    box-shadow: 4px 4px 0 0 var(--color-ink);
+    border-radius: 0;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.08s, box-shadow 0.08s;
+    touch-action: manipulation;
+  }
+  .vk-btn:hover { background: var(--color-dsa-bright); }
+  .vk-btn:active { transform: translate(2px,2px); box-shadow: 2px 2px 0 0 var(--color-ink); }
+  .vk-btn:disabled { opacity: 0.45; cursor: default; }
+  .vk-btn--ghost {
+    background: #fff;
+    color: var(--color-ink);
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    min-height: 44px;
+    box-shadow: none;
+    border-color: rgba(0,0,0,0.45);
+  }
+  .vk-btn--ghost:hover { background: var(--color-ink); color: var(--color-cream); }
+
+  .vk-err {
+    display: none;
+    margin: 10px 0 0;
+    padding: 9px 11px;
+    font-family: var(--font-ui);
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--color-dsa);
+    background: #fff;
+    border: 1px solid var(--color-dsa);
+  }
+  .vk-err.show { display: block; }
+
+  /* ---- warning box (provisional notices) ---- */
+  .vk-warn {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    background: #fff;
+    border: 1px solid var(--color-dsa);
+    border-left: 6px solid var(--color-dsa);
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: rgba(0,0,0,0.8);
+  }
+  .vk-warn b.vk-warn-t {
+    display: block;
+    color: var(--color-dsa);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.66rem;
+    margin-bottom: 2px;
+  }
+  .vk-warn[hidden] { display: none; }
+  .vk-ticker-sub {
+    margin-top: 6px;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: rgba(0,0,0,0.6);
+  }
+  .vk-ticker-sub[hidden] { display: none; }
+
+  /* ---- "how it works" expander on check-in ---- */
+  .vk-how {
+    margin: 14px 0 0;
+    border: 1px solid rgba(0,0,0,0.25);
+    background: var(--color-cream);
+    font-family: var(--font-ui);
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+  .vk-how summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 9px 11px;
+    font-weight: 700;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-dsa);
+  }
+  .vk-how summary::-webkit-details-marker { display: none; }
+  .vk-how summary::after { content: " ▾"; }
+  .vk-how[open] summary::after { content: " ▴"; }
+  .vk-how ol { margin: 0; padding: 0 14px 11px 26px; }
+  .vk-how li { margin: 0 0 7px; }
+  .vk-input[readonly] { background: var(--color-cream); color: rgba(0,0,0,0.6); }
+
+  /* ---- ballot measure text block ---- */
+  .vk-measure {
+    border: 1px solid rgba(0,0,0,0.25);
+    background: var(--color-cream);
+    padding: 12px 13px;
+    margin: 0 0 16px;
+  }
+  .vk-measure-no {
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 0.64rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-dsa);
+    margin: 0 0 4px;
+  }
+  .vk-measure-q {
+    font-family: var(--font-display);
+    font-weight: 800;
+    text-transform: uppercase;
+    font-size: 1.35rem;
+    line-height: 1;
+    margin: 0 0 8px;
+  }
+  .vk-measure-t {
+    font-family: var(--font-body);
+    font-size: 0.93rem;
+    line-height: 1.48;
+    color: rgba(0,0,0,0.82);
+    margin: 0;
+  }
+  .vk-measure-t + .vk-measure-t { margin-top: 0.5em; }
+
+  /* ---- ballot options ---- */
+  .vk-opts { display: flex; flex-direction: column; gap: 10px; }
+  .vk-opt {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    width: 100%;
+    padding: 14px 13px;
+    background: #fff;
+    border: 1px solid var(--color-ink);
+    border-radius: 0;
+    cursor: pointer;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.7rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-ink);
+    text-align: left;
+    transition: background 0.12s, box-shadow 0.12s;
+    touch-action: manipulation;
+  }
+  .vk-opt:hover { background: var(--color-cream); }
+  .vk-opt[aria-checked="true"] {
+    background: var(--color-tan);
+    box-shadow: 4px 4px 0 0 var(--color-dsa);
+    border-color: var(--color-dsa);
+  }
+  .vk-opt small {
+    display: block;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    color: rgba(0,0,0,0.6);
+    margin-top: 2px;
+  }
+  .vk-bubble { flex: none; width: 44px; height: 26px; overflow: visible; }
+  .vk-bubble .ring { fill: none; stroke: var(--color-ink); stroke-width: 5; }
+  .vk-bubble .ink {
+    fill: var(--color-ink);
+    opacity: 0;
+    transform: scale(0.5);
+    transform-origin: center;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+  }
+  .vk-opt[aria-checked="true"] .vk-bubble .ink { opacity: 1; transform: scale(1); }
+  @media (prefers-reduced-motion: reduce) { .vk-bubble .ink { transition: none; } }
+
+  /* ---- voter identity chip ---- */
+  .vk-voter {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 14px;
+    padding: 8px 11px;
+    background: var(--color-cream);
+    border: 1px solid rgba(0,0,0,0.25);
+    font-family: var(--font-ui);
+    font-size: 0.8rem;
+    min-width: 0;
+  }
+  .vk-voter b { font-weight: 700; overflow-wrap: anywhere; }
+  .vk-voter .vk-vid {
+    margin-left: auto;
+    font-weight: 700;
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-dsa);
+    flex: none;
+  }
+
+  /* ---- review row ---- */
+  .vk-review {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    border: 1px solid var(--color-ink);
+    background: var(--color-tan);
+    box-shadow: 4px 4px 0 0 var(--color-dsa);
+    padding: 15px 13px;
+    margin: 0 0 6px;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.9rem;
+    text-transform: uppercase;
+  }
+
+  /* ---- receipt ---- */
+  .vk-receipt { text-align: center; padding: 6px 0 2px; }
+  .vk-bigmark { width: 120px; height: 74px; margin: 4px auto 2px; display: block; overflow: visible; }
+  .vk-bigmark .ring { fill: none; stroke: var(--color-ink); stroke-width: 5; }
+  .vk-bigmark .ink { fill: var(--color-ink); transform-origin: center; animation: vk-ink-in 0.5s ease 0.15s both; }
+  @keyframes vk-ink-in {
+    from { opacity: 0; transform: scale(0.4); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .vk-bigmark .ink { animation: none; } }
+  .vk-receipt h2 { font-size: 2.3rem; font-weight: 900; margin: 6px 0 4px; }
+  .vk-receipt .vk-choice {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.3rem;
+    text-transform: uppercase;
+    color: var(--color-dsa);
+    margin: 0 0 12px;
+  }
+  .vk-code {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    background: var(--color-cream);
+    border: 1px dashed var(--color-ink);
+    padding: 8px 14px;
+    margin: 2px 0 4px;
+  }
+  .vk-code-lbl {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.62);
+    margin: 0 0 5px;
+  }
+  .vk-fine {
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: rgba(0,0,0,0.62);
+    margin: 12px 0 0;
+  }
+
+  /* ---- turnout ticker ---- */
+  .vk-ticker {
+    margin-top: 14px;
+    border: 1px solid var(--color-ink);
+    background: #fff;
+    box-shadow: 4px 4px 0 0 var(--color-ink);
+    padding: 11px 13px 13px;
+  }
+  .vk-ticker-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    font-family: var(--font-ui);
+  }
+  .vk-ticker-lbl {
+    font-weight: 700;
+    font-size: 0.64rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(0,0,0,0.6);
+  }
+  .vk-ticker-n {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: var(--color-dsa);
+    font-variant-numeric: tabular-nums;
+  }
+  .vk-ticker-n small { font-size: 0.85rem; font-weight: 800; color: var(--color-ink); }
+  .vk-meter {
+    margin-top: 8px;
+    height: 12px;
+    border: 1px solid var(--color-ink);
+    background: var(--color-cream);
+    overflow: hidden;
+  }
+  .vk-meter > i {
+    display: block;
+    height: 100%;
+    background: repeating-linear-gradient(-45deg, var(--color-dsa) 0 6px, var(--color-dsa-bright) 6px 12px);
+    width: 0%;
+    transition: width 0.6s ease;
+  }
+
+  footer {
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    color: rgba(0,0,0,0.6);
+    text-align: center;
+    padding: 14px 16px 22px;
+    line-height: 1.5;
+  }
+  footer b { color: var(--color-dsa); }
+
+  .vk-demo { max-width: 430px; margin: 12px auto 0; padding: 0 14px; }
+  .vk-demo-in {
+    border: 1px dashed var(--color-dsa);
+    background: #fff;
+    padding: 8px 11px;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: rgba(0,0,0,0.7);
+  }
+  .vk-demo-in b { color: var(--color-dsa); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.66rem; }
+  .vk-demo-in code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-weight: 700;
+    background: var(--color-cream);
+    padding: 0 4px;
+  }
+
+  .vk-screen { display: none; }
+  .vk-screen.active { display: block; animation: vk-screen-in 0.22s ease; }
+  @keyframes vk-screen-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .vk-screen.active { animation: none; } }
+
+  .vk-actions { display: flex; flex-direction: column; gap: 8px; }
+  .vk-spin {
+    width: 1rem; height: 1rem; flex: none;
+    border: 2px solid var(--color-cream);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: vk-spin 0.7s linear infinite;
+    display: none;
+  }
+  .vk-btn.loading .vk-spin { display: inline-block; }
+  @keyframes vk-spin { to { transform: rotate(360deg); } }
+  .vk-resend {
+    margin-top: 10px;
+    text-align: center;
+    font-family: var(--font-ui);
+    font-size: 0.8rem;
+  }
+  .vk-resend button {
+    background: none; border: none; padding: 4px 6px; cursor: pointer;
+    font-family: var(--font-ui); font-weight: 700; font-size: 0.8rem;
+    color: var(--color-dsa); text-decoration: underline; text-underline-offset: 2px;
+  }
+  /* ---- multi-question additions ---- */
+  .vk-rev-row {
+    border: 1px solid var(--color-ink);
+    background: var(--color-tan);
+    box-shadow: 4px 4px 0 0 var(--color-dsa);
+    padding: 11px 13px;
+    margin: 0 0 10px;
+  }
+  .vk-rev-q {
+    font-family: var(--font-ui); font-weight: 700; font-size: 0.62rem;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(0,0,0,0.6); margin: 0 0 3px;
+  }
+  .vk-rev-a {
+    font-family: var(--font-display); font-weight: 800; font-size: 1.45rem;
+    text-transform: uppercase; line-height: 1; margin: 0;
+  }
+  .vk-rev-a.is-text {
+    font-family: var(--font-body); font-weight: 400; font-size: 0.9rem;
+    text-transform: none; line-height: 1.4;
+  }
+  textarea.vk-input { resize: vertical; min-height: 110px; font-family: var(--font-body); line-height: 1.45; }
+  /* ---- ranked-choice (Scottish STV) + pledge checkboxes ---- */
+  .vk-rankn {
+    flex: none; width: 30px; height: 30px;
+    border: 2px solid var(--color-ink); background: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-ui); font-weight: 800; font-size: 1.05rem;
+  }
+  .vk-opt.is-ranked { background: var(--color-tan); border-color: var(--color-dsa); box-shadow: 4px 4px 0 0 var(--color-dsa); }
+  .vk-opt.is-ranked .vk-rankn { background: var(--color-dsa); border-color: var(--color-dsa); color: var(--color-cream); }
+  /* delegate contest: ranks beyond the delegate-seat count go black — they still
+     count, and feed the alternates recount */
+  .vk-opt.is-ranked-over { background: var(--color-ink); border-color: var(--color-ink); box-shadow: 4px 4px 0 0 var(--color-ink); color: var(--color-cream); }
+  .vk-opt.is-ranked-over small { color: rgba(255,245,229,.72); }
+  .vk-opt.is-ranked-over .vk-rankn { background: var(--color-cream); border-color: var(--color-cream); color: var(--color-ink); }
+  .vk-rank-hint {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    font-family: var(--font-ui); font-size: 0.72rem; color: rgba(0,0,0,0.6); margin: 8px 0 0;
+  }
+  .vk-rank-clear {
+    background: none; border: none; padding: 2px 4px; cursor: pointer;
+    font-family: var(--font-ui); font-weight: 700; font-size: 0.72rem;
+    color: var(--color-dsa); text-decoration: underline; text-underline-offset: 2px;
+  }
+  /* ---- ballot sections: three visually distinct voting categories ---- */
+  .vk-sect {
+    border: 1px solid var(--color-ink);
+    box-shadow: 5px 5px 0 0 var(--color-ink);
+    padding: 12px 14px;
+    margin: 24px 0 6px;
+  }
+  .vk-sect-1 { background: var(--color-dsa); color: var(--color-cream); }
+  .vk-sect-2 { background: var(--color-ink); color: var(--color-cream); }
+  .vk-sect-3 { background: var(--color-tan); color: var(--color-ink); border-color: var(--color-dsa); box-shadow: 5px 5px 0 0 var(--color-dsa); }
+  .vk-sect-k { font-family: var(--font-ui); font-weight: 700; font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; opacity: .85; margin: 0 0 3px; }
+  .vk-sect-t { font-family: var(--font-display); font-weight: 900; text-transform: uppercase; font-size: 1.7rem; line-height: .95; margin: 0; }
+  .vk-sect-s { font-family: var(--font-ui); font-size: .78rem; line-height: 1.4; margin: 5px 0 0; opacity: .92; }
+  .vk-checkbox {
+    flex: none; width: 26px; height: 26px;
+    border: 2px solid var(--color-ink); background: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 800; color: transparent;
+  }
+  .vk-opt[aria-checked="true"] .vk-checkbox { color: var(--color-dsa); }
+</style>
+</head>
+<body>
+<header class="vk-band"><div class="vk-band-inner"><div class="vk-wordmark">Chapter Member Ballot<small>__CHAPTER_NAME__ &middot; Democratic Socialists of America</small></div><a class="vk-rose" href="/" style="color:inherit;text-decoration:none;display:block;" aria-label="DSA Vote home">DSA<br/>Vote</a></div></header>
+<main>
+<div class="ballot-marks" style="height:7px; margin-top:4px;"></div>
+  <section class="vk-screen active" id="scr-code">
+    <div class="vk-card">
+      <div class="vk-card-band"><h2>Enter Your Code</h2><div class="vk-step">__CHAPTER_NAME__<br/>Verify your ballot</div></div>
+      <div class="vk-card-body">
+        <p class="vk-kicker">__CHAPTER_NAME__ chapter ballot</p>
+        <p class="vk-lede">Enter the <b>voting code</b> from your ballot email, text, or postcard. Your personalized link opens your ballot directly &mdash; no password, no account.</p>
+        <label class="vk-label" for="in-code">Voting code</label>
+        <input class="vk-input vk-input--code" id="in-code" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;" />
+        <div class="vk-err" id="code-err" role="alert" aria-live="assertive"></div>
+        <button class="vk-btn" id="code-btn" type="button"><span class="vk-spin"></span> Open my ballot</button>
+        <details class="vk-how"><summary>Can&rsquo;t find your code?</summary><ol>
+          <li><b>Emailed / texted to you</b> as a tap-to-vote link. Check other inboxes and spam.</li>
+          <li><b>Mailed a postcard?</b> Your code is printed on it; scan the QR or type it above.</li>
+          <li><b>Eligible but got no code?</b> <a href="#" id="prov-link" style="color:var(--color-dsa);font-weight:700;">Cast a provisional ballot</a> &mdash; sealed, counts once membership verifies you.</li>
+          <li><b>Still stuck?</b> <a href="mailto:orgtools@dsausa.org?subject=__HELP_SUBJECT__" style="color:var(--color-dsa);font-weight:700;">Email orgtools@dsausa.org</a> &mdash; clicking the link pre-fills the subject with your chapter and the issue; just add your name and send.</li>
+        </ol></details>
+      </div>
+    </div>
+  </section>
+  <section class="vk-screen" id="scr-prov">
+    <div class="vk-card">
+      <div class="vk-card-band"><h2>Provisional Ballot</h2><div class="vk-step">__CHAPTER_NAME__<br/>No code on file</div></div>
+      <div class="vk-card-body">
+        <div class="vk-warn"><b class="vk-warn-t">Sealed until verified</b>A provisional ballot is set aside and <b>only counts after National Membership confirms your eligibility</b>. You&rsquo;ll be notified either way. Votes are final.</div>
+        <label class="vk-label" for="pv-first">First name</label><input class="vk-input" id="pv-first" type="text" autocomplete="given-name" />
+        <div style="height:12px"></div><label class="vk-label" for="pv-last">Last name</label><input class="vk-input" id="pv-last" type="text" autocomplete="family-name" />
+        <div style="height:12px"></div><label class="vk-label" for="pv-emails">All emails that might be on your membership</label>
+        <textarea class="vk-input" id="pv-emails" rows="3" inputmode="email" placeholder="you@example.com, old@email.com, school@university.edu…" style="min-height:70px;"></textarea>
+        <div style="height:12px"></div><label class="vk-label" for="pv-phones">Phone number(s) associated with you</label>
+        <textarea class="vk-input" id="pv-phones" rows="2" inputmode="tel" placeholder="(555) 123-4567, (555) 987-6543" style="min-height:52px;"></textarea>
+        <div style="height:12px"></div><label class="vk-label" for="pv-chapter">Your DSA chapter</label><input class="vk-input" id="pv-chapter" type="text" value="__CHAPTER_NAME__" />
+        <div style="height:12px"></div><label class="vk-label" for="pv-joined">When did you join DSA? <span style="text-transform:none; letter-spacing:0; font-weight:600;">(optional)</span></label>
+        <input class="vk-input" id="pv-joined" type="text" placeholder="e.g. March 2023" />
+        <div style="height:12px"></div><label class="vk-label" for="pv-altnames">Other names you might be listed under <span style="text-transform:none; letter-spacing:0; font-weight:600;">(optional)</span></label>
+        <input class="vk-input" id="pv-altnames" type="text" placeholder="maiden name, previous name, nickname…" />
+        <div class="vk-err" id="pv-err" role="alert" aria-live="assertive"></div>
+        <button class="vk-btn" id="pv-continue" type="button">Continue to my ballot</button>
+        <button class="vk-btn vk-btn--ghost" id="pv-back" type="button">&larr; Back</button>
+      </div>
+    </div>
+  </section>
+  <section class="vk-screen" id="scr-ballot">
+    <div class="vk-card">
+      <div class="vk-card-band">
+        <h2>Your Ballot</h2>
+        <div class="vk-step">Step 3 of 4<br/>Five questions</div>
+      </div>
+      <div class="vk-card-body">
+        
+
+        <div class="vk-warn" id="prov-banner-ballot" hidden>
+          <b class="vk-warn-t">Provisional ballot</b>
+          Your vote is sealed until National Membership verifies your membership — it does
+          not count (or appear in the tally) until then. You’ll be notified either way.
+        </div>
+
+        <div class="vk-sect vk-sect-1">
+          <p class="vk-sect-k">Section 1 of 3 · Shared questions</p>
+          <h3 class="vk-sect-t">Chapter Poll</h3>
+          <p class="vk-sect-s">Questions 1–5 are polled identically in every chapter — an advisory
+          expression of the membership, reported per chapter and aggregated nationally.</p>
+        </div>
+        <div class="vk-warn">
+          <b class="vk-warn-t">How your votes are seen</b>
+          Sections 1 and 3 (poll questions and local issues) are recorded by name —
+          election administrators and your chapter can see how each member voted.
+          <b>Section 2 (convention delegates) is a secret ballot</b>: your ranking is
+          stored without your name or chapter; only election administrators can access
+          delegate ballots, solely for troubleshooting. National does not publish your
+          chapter's results — your chapter decides whether to publish its results,
+          including how members voted (never delegate rankings).
+        </div>
+        <div class="vk-measure">
+          <p class="vk-measure-no">Question 1 of 8 · Endorsement</p>
+          <p class="vk-measure-q">Shall DSA endorse Eugene V. Debs for President of the United States?</p>
+          <p class="vk-measure-t"><em>Resolved,</em> that the Democratic Socialists of America
+          endorses Eugene V. Debs — founder of the American Railway Union, leader of the 1894
+          Pullman strike, five-time Socialist Party of America candidate for President, and
+          Convict No. 9653, who polled nearly a million votes in 1920 from a cell in the
+          Atlanta Federal Penitentiary after his conviction under the Espionage Act for
+          speaking against the war — for President of the United States;</p>
+          <p class="vk-measure-t"><em>Resolved,</em> that the campaign shall carry the platform
+          he ran on: collective ownership of the railroads, mines, and utilities; the
+          eight-hour day and the abolition of child labor; industrial unionism as the engine
+          of working-class power; equal suffrage; amnesty for political prisoners and repeal
+          of the Espionage Act; and unconditional opposition to imperialist war; and</p>
+          <p class="vk-measure-t"><em>Resolved,</em> that the campaign be conducted in his
+          spirit — <em>“while there is a lower class, I am in it; while there is a criminal
+          element, I am of it; while there is a soul in prison, I am not free”</em> —
+          organizing the working class rather than courting donors, and that this endorsement
+          may be withdrawn by a subsequent vote of the membership. <em>(Draft test language —
+          Debs, 1855–1926, stands in for an eventual nominee.)</em></p>
+        </div>
+
+        <div class="vk-opts" role="radiogroup" aria-label="Question 1 — endorsement" data-q="q1" data-type="single">
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="YES">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Yes<small>Endorse</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="NO">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>No<small>Do not endorse</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="ABSTAIN">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Abstain<small>Counted for quorum only</small></span>
+          </button>
+        </div>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 2 of 8 · Campaign structure — ranked choice</p>
+          <p class="vk-measure-q">Rank the campaign structures</p>
+          <p class="vk-measure-t">Counted by <b>Scottish STV</b>. Tap options in order of
+          preference — 1 is your first choice; tap again to remove. Rank as many or as few
+          as you like (at least a first choice) — or tap Abstain to skip.</p>
+        </div>
+        <div class="vk-opts" aria-label="Question 2 — campaign structure, ranked" data-q="q2" data-type="rank">
+          <button type="button" class="vk-opt" data-choice="IE" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Independent expenditure<small>DSA runs its own program</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="COORD" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Coordinated campaign<small>Work directly with the campaign</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="NOEND" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>No endorsement<small>Run no presidential campaign</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="NOTA" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>None of the above<small></small></span>
+          </button>
+        <button type="button" class="vk-opt" data-choice="ABSTAIN" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Abstain<small>Skip this question</small></span>
+          </button>
+        </div>
+        <p class="vk-rank-hint"><span id="q2-hint" aria-live="polite">No preferences ranked yet.</span>
+          <button type="button" class="vk-rank-clear" data-clear="q2">Clear rankings</button></p>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 3 of 8 · The 1912 field — ranked choice</p>
+          <p class="vk-measure-q">Rank the candidates</p>
+          <p class="vk-measure-t">Test question using Debs’s actual 1912 opponents. Counted by
+          <b>Scottish STV</b> — same rules as above.</p>
+        </div>
+        <div class="vk-opts" aria-label="Question 3 — candidates, ranked" data-q="q3" data-type="rank">
+          <button type="button" class="vk-opt" data-choice="DEBS" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Eugene V. Debs<small>Socialist Party</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="WILSON" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Woodrow Wilson<small>Democratic Party</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="ROOSEVELT" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Theodore Roosevelt<small>Progressive “Bull Moose” Party</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="TAFT" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>William Howard Taft<small>Republican Party</small></span>
+          </button>
+          <button type="button" class="vk-opt" data-choice="NOTA2" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>None of the above<small></small></span>
+          </button>
+        <button type="button" class="vk-opt" data-choice="ABSTAIN" style="font-size:1.35rem;">
+            <span class="vk-rankn" aria-hidden="true"></span>
+            <span>Abstain<small>Skip this question</small></span>
+          </button>
+        </div>
+        <p class="vk-rank-hint"><span id="q3-hint" aria-live="polite">No preferences ranked yet.</span>
+          <button type="button" class="vk-rank-clear" data-clear="q3">Clear rankings</button></p>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 4 of 8 · Pledges — check all that apply, optional</p>
+          <p class="vk-measure-q">If the campaign moves forward, I pledge to…</p>
+        </div>
+        <div class="vk-opts" aria-label="Question 4 — pledges" data-q="pledges" data-type="multi">
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="DONATE" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Donate<small>Chip in to the campaign fund</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="VOLUNTEER" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Volunteer<small>General campaign work</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="CANVASS" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Canvass<small>Knock doors with my chapter</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="PHONEBANK" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Phone bank<small>Call voters and members</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="TEXTBANK" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Text bank<small>Send campaign texts</small></span>
+          </button>
+          <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="HOST" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Host<small>House meeting or debate watch party</small></span>
+          </button>
+        <button type="button" class="vk-opt" role="checkbox" aria-checked="false" data-choice="ABSTAIN" style="font-size:1.35rem;">
+            <span class="vk-checkbox" aria-hidden="true">✓</span>
+            <span>Abstain<small>No pledges</small></span>
+          </button>
+        </div>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 5 of 8 · What should the NPC know? — optional</p>
+          <p class="vk-measure-q">Anything the NPC should know?</p>
+          <p class="vk-measure-t">Free form — priorities, concerns, conditions on the endorsement.
+          Stored with your ballot record (election administrators only, never published). Leave blank to abstain.</p>
+        </div>
+        <label class="vk-label" for="q3-text">Your comment (optional, 1,000 characters max)</label>
+        <textarea class="vk-input" id="q3-text" maxlength="1000" placeholder="In your own words…"></textarea>
+
+        <div class="vk-sect vk-sect-2">
+          <p class="vk-sect-k">Section 2 of 3 · __CHAPTER_NAME__</p>
+          <h3 class="vk-sect-t">Convention Delegates</h3>
+          <p class="vk-sect-s">Your chapter's delegation to the national convention — ranked choice,
+          counted by Scottish STV. <b>Secret ballot</b> (Const. Art. V &sect;5): your ranking is
+          stored without your name or chapter. Election administrators can access delegate
+          ballots only for troubleshooting, under audit.</p>
+        </div>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 6 of 8 · Convention delegates — ranked choice</p>
+          <p class="vk-measure-q">Elect __Q7_SEATS__ delegates + __Q7_ALTS__</p>
+          <p class="vk-measure-t">__Q7_NOTE__ <em>(Test slate — historical figures, obviously not running.)</em></p>
+        </div>
+        <div class="vk-opts" aria-label="Question 6 — convention delegates, ranked" data-q="q7" data-type="rank">
+          __Q7_OPTIONS__
+        </div>
+        <p class="vk-rank-hint"><span id="q7-hint" aria-live="polite">No preferences ranked yet.</span>
+          <button type="button" class="vk-rank-clear" data-clear="q7">Clear rankings</button></p>
+
+        <div class="vk-sect vk-sect-3">
+          <p class="vk-sect-k">Section 3 of 3 · __CHAPTER_NAME__</p>
+          <h3 class="vk-sect-t">Local Issues</h3>
+          <p class="vk-sect-s">Ballot issues specific to __CHAPTER_NAME__ — these appear only on your chapter's ballot.</p>
+        </div>
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 7 of 8 · Local issue 1</p>
+          <p class="vk-measure-q">__Q6_QUESTION__</p>
+          <p class="vk-measure-t">This question appears only on the __CHAPTER_NAME__ ballot.</p>
+        </div>
+        <div class="vk-opts" role="radiogroup" aria-label="Question 7 — local issue 1" data-q="q6" data-type="single">
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="YES" tabindex="0">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Yes</span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="NO" tabindex="-1">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>No</span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="ABSTAIN" tabindex="-1">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Abstain</span>
+          </button>
+        </div>
+
+
+
+        <div class="vk-measure" style="margin-top:20px;">
+          <p class="vk-measure-no">Question 8 of 8 · Local issue 2</p>
+          <p class="vk-measure-q">__Q8_QUESTION__</p>
+          <p class="vk-measure-t">Second local ballot issue for __CHAPTER_NAME__.</p>
+        </div>
+        <div class="vk-opts" role="radiogroup" aria-label="Question 8 — local issue 2" data-q="q8" data-type="single">
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="YES" tabindex="0">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Yes</span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="NO" tabindex="-1">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>No</span>
+          </button>
+          <button type="button" class="vk-opt" role="radio" aria-checked="false" data-choice="ABSTAIN" tabindex="-1">
+            <svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">
+              <ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>
+              <ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/>
+            </svg>
+            <span>Abstain</span>
+          </button>
+        </div>
+
+
+
+        <button class="vk-btn" id="to-review" disabled>Review my vote</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= 4 · REVIEW & CAST ======================= -->
+  <section class="vk-screen" id="scr-review">
+    <div class="vk-card">
+      <div class="vk-card-band">
+        <h2>Confirm &amp; Cast</h2>
+        <div class="vk-step">Step 4 of 4<br/>Final — no changes after</div>
+      </div>
+      <div class="vk-card-body">
+        <div class="vk-voter" id="voter-chip-review"></div>
+
+        <div class="vk-warn" id="prov-banner-review" hidden>
+          <b class="vk-warn-t">Provisional ballot</b>
+          Sealed until your membership is verified. Casting it still uses your one vote.
+        </div>
+
+        <p class="vk-kicker">Your ballot — five questions</p>
+        <div id="review-rows"></div>
+        <p class="vk-lede" style="margin-top:12px;">Casting is <b>final — no revotes and no
+        changes</b>. Your ballot is recorded for election administration only and is
+        <b>never published publicly</b> — results are released as totals.</p>
+
+        <div class="vk-err" id="cast-err" role="alert" aria-live="assertive"></div>
+
+        <div class="vk-actions">
+          <button class="vk-btn" id="cast-btn"><span class="vk-spin"></span> Cast my ballot</button>
+          <button class="vk-btn vk-btn--ghost" id="back-btn">← Go back and change</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= 5 · RECEIPT ======================= -->
+  <section class="vk-screen" id="scr-done">
+    <div class="vk-card">
+      <div class="vk-card-band">
+        <h2>Ballot Cast</h2>
+        <div class="vk-step">Done<br/>Solidarity ✊</div>
+      </div>
+      <div class="vk-card-body">
+        <div class="vk-receipt">
+          <svg class="vk-bigmark" viewBox="0 0 120 74" aria-hidden="true">
+            <ellipse class="ring" cx="60" cy="37" rx="52" ry="27"/>
+            <ellipse class="ink" cx="60" cy="37" rx="48" ry="23.5"/>
+          </svg>
+          <h2 id="done-title">Vote Recorded</h2>
+          <p class="vk-choice" id="done-choice"></p>
+          <div id="done-votes" style="text-align:left; margin:0 0 12px;"></div>
+          <div class="vk-warn" id="done-warn" hidden style="text-align:left;"></div>
+          <p class="vk-code-lbl" id="receipt-lbl">Your receipt code</p>
+          <div class="vk-code" id="receipt-code" aria-live="polite" role="status"></div>
+          <p class="vk-fine" id="done-conf"></p>
+          <p class="vk-fine">Save this code — it’s how election admins find your ballot if
+          you ever need help. Individual votes are visible to election administrators only
+          and are never published publicly; results are released as totals. Votes are
+          final: no revotes, no changes.</p>
+          <p class="vk-fine">Questions? <a id="help-link" href="mailto:orgtools@dsausa.org"
+          style="color:var(--color-dsa); font-weight:700;">Email orgtools@dsausa.org</a> —
+          your receipt code is pre-filled in the subject so admins can find your ballot fast.</p>
+        </div>
+
+        <div class="vk-ticker" style="box-shadow:none; margin-top:16px;">
+          <div class="vk-ticker-top">
+            <span class="vk-ticker-lbl">Ballots cast so far</span>
+            <span class="vk-ticker-n"><span id="turnout-n2">0</span> <small>/ 120,000</small></span>
+          </div>
+          <div class="vk-meter"><i id="turnout-bar2"></i></div>
+          <div class="vk-ticker-sub" id="turnout-prov2" hidden></div>
+        </div>
+
+        <button class="vk-btn" id="next-voter" style="margin-top:16px;">Done</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+<footer><b>Democratic Socialists of America</b> &middot; __CHAPTER_NAME__.<br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built by DSA Staff&rsquo;s Data &amp; Tech Department</footer>
+<script>
+(function(){"use strict";
+var POLL_ID="__POLL_ID__",EMBEDDED_CODE="__CODE__";
+var Q1_LABEL={YES:"Yes — endorse Debs",NO:"No — do not endorse",ABSTAIN:"Abstain"};
+var Q2_NAME={IE:"Independent expenditure",COORD:"Coordinated campaign",NOEND:"No endorsement",NOTA:"None of the above",ABSTAIN:"Abstain"};
+var Q3_NAME={DEBS:"Eugene V. Debs",WILSON:"Woodrow Wilson",ROOSEVELT:"Theodore Roosevelt",TAFT:"William Howard Taft",NOTA2:"None of the above",ABSTAIN:"Abstain"};
+var Q7_NAME=__Q7_NAMES__;var Q7_SEATS=__Q7_SEATS_N__;
+var PLEDGE_NAME={DONATE:"Donate",VOLUNTEER:"Volunteer",CANVASS:"Canvass",PHONEBANK:"Phone bank",TEXTBANK:"Text bank",HOST:"Host",ABSTAIN:"Abstain — no pledges"};
+var $=function(id){return document.getElementById(id);};
+var screens=document.querySelectorAll(".vk-screen");
+function show(id){for(var i=0;i<screens.length;i++)screens[i].classList.remove("active");var s=$(id);s.classList.add("active");window.scrollTo(0,0);
+ var hd=s.querySelector("h2");if(hd){hd.setAttribute("tabindex","-1");hd.focus();}}
+function setErr(el,m){if(!el)return;el.textContent=m||"";el.classList.toggle("show",!!m);}
+function esc(t){return String(t).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+var code="",provisional=false,provInfo=null;
+var answers={q1:null,q2:[],q3:[],pledges:[],q6:null,q7:[],q8:null,text:""};
+function resetAnswers(){answers={q1:null,q2:[],q3:[],pledges:[],q6:null,q7:[],q8:null,text:""};var t=$("q3-text");if(t)t.value="";syncOpts();}
+function api(p){return POLL_ID?("/p/"+POLL_ID+p):p;}
+
+/* ---- code gate ---- */
+function submitCode(){var err=$("code-err");setErr(err,"");var val=($("in-code").value||"").trim();
+ if(!/^[A-Za-z0-9_-]{12,64}$/.test(val)){setErr(err,"Enter the voting code from your ballot email, text, or postcard.");return;}
+ var b=$("code-btn");b.disabled=true;b.classList.add("loading");
+ fetch(api("/voted?code="+encodeURIComponent(val))).then(function(r){return r.json().then(function(d){return{s:r.status,d:d};});})
+ .then(function(res){b.disabled=false;b.classList.remove("loading");
+  if(res.s===404||res.d.error){setErr(err,"That voting code was not recognized.");return;}
+  if(res.d.voted){setErr(err,"This code has already been used to vote. Votes are final.");return;}
+  code=val;provisional=false;resetAnswers();$("prov-banner-ballot").hidden=true;show("scr-ballot");})
+ .catch(function(){b.disabled=false;b.classList.remove("loading");setErr(err,"Network error. Please try again.");});}
+$("code-btn").addEventListener("click",submitCode);
+$("in-code").addEventListener("keydown",function(e){if(e.key==="Enter")submitCode();});
+$("prov-link").addEventListener("click",function(e){e.preventDefault();show("scr-prov");});
+$("pv-back").addEventListener("click",function(){show("scr-code");});
+$("pv-continue").addEventListener("click",function(){var err=$("pv-err");setErr(err,"");
+ var f=$("pv-first").value.trim(),l=$("pv-last").value.trim(),ch=$("pv-chapter").value.trim();
+ var emails=$("pv-emails").value.trim(),phones=$("pv-phones").value.trim();
+ if(!f||!l){setErr(err,"Enter your first and last name.");return;}
+ if(!/[^\s@]+@[^\s@]+\.[^\s@]{2,}/.test(emails)){setErr(err,"List at least one valid email address.");return;}
+ if(!ch){setErr(err,"Enter your chapter.");return;}
+ provisional=true;provInfo={first:f,last:l,emails:emails,phones:phones,chapter:ch,
+  joined:$("pv-joined").value.trim(),alt_names:$("pv-altnames").value.trim()};resetAnswers();
+ $("prov-banner-ballot").hidden=false;show("scr-ballot");});
+
+/* ---- five-question ballot: single / rank(+exclusive abstain) / multi ---- */
+var groups=document.querySelectorAll(".vk-opts");
+function ordinalHint(q,hintId,names){var el=$(hintId);if(!el)return;
+ if(!answers[q].length){el.textContent="No preferences ranked yet.";return;}
+ if(answers[q][0]==="ABSTAIN"){el.textContent="Abstaining on this question.";return;}
+ var parts=[];for(var i=0;i<answers[q].length;i++)parts.push((i+1)+". "+names[answers[q][i]]);
+ el.textContent=parts.join("  ·  ");}
+function syncOpts(){
+ for(var g=0;g<groups.length;g++){
+  var q=groups[g].getAttribute("data-q"),type=groups[g].getAttribute("data-type");
+  var btns=groups[g].querySelectorAll(".vk-opt");
+  for(var i=0;i<btns.length;i++){var c=btns[i].getAttribute("data-choice");
+   if(type==="single"){var sel=c===answers[q];btns[i].setAttribute("aria-checked",String(sel));btns[i].setAttribute("tabindex",sel?"0":"-1");}
+   else if(type==="multi"){btns[i].setAttribute("aria-checked",String(answers[q].indexOf(c)!==-1));}
+   else{var pos=answers[q].indexOf(c);btns[i].classList.toggle("is-ranked",pos!==-1);
+    var over=q==="q7"&&pos>=Q7_SEATS&&c!=="ABSTAIN";
+    btns[i].classList.toggle("is-ranked-over",pos!==-1&&over);
+    btns[i].querySelector(".vk-rankn").textContent=pos===-1?"":(c==="ABSTAIN"?"✓":String(pos+1));
+    btns[i].setAttribute("aria-pressed",String(pos!==-1));
+    var nmMap=q==="q2"?Q2_NAME:q==="q3"?Q3_NAME:Q7_NAME;var nm=nmMap[c]||c;
+    btns[i].setAttribute("aria-label",pos===-1?nm:(c==="ABSTAIN"?nm+", selected":nm+", ranked "+(pos+1)+(over?" — beyond the delegate seats; still counts toward alternates":"")));}}
+  if(type==="single"&&!answers[q]&&btns.length)btns[0].setAttribute("tabindex","0");}
+ ordinalHint("q2","q2-hint",Q2_NAME);ordinalHint("q3","q3-hint",Q3_NAME);ordinalHint("q7","q7-hint",Q7_NAME);
+ $("to-review").disabled=!(answers.q1&&answers.q2.length>0&&answers.q3.length>0&&answers.q6&&answers.q7.length>0&&answers.q8);}
+for(var g=0;g<groups.length;g++)(function(group){
+ var q=group.getAttribute("data-q"),type=group.getAttribute("data-type");
+ var btns=group.querySelectorAll(".vk-opt");
+ function pick(i){var c=btns[i].getAttribute("data-choice");
+  if(type==="single"){answers[q]=c;}
+  else if(c==="ABSTAIN"){answers[q]=answers[q].indexOf("ABSTAIN")!==-1?[]:["ABSTAIN"];}
+  else{var ab=answers[q].indexOf("ABSTAIN");if(ab!==-1)answers[q].splice(ab,1);
+   var pos=answers[q].indexOf(c);if(pos!==-1)answers[q].splice(pos,1);else answers[q].push(c);}
+  syncOpts();btns[i].focus();}
+ for(var i=0;i<btns.length;i++)(function(idx){
+  btns[idx].addEventListener("click",function(){pick(idx);});
+  if(type==="single")btns[idx].addEventListener("keydown",function(e){var k=e.key,nn=btns.length;
+   if(k==="ArrowDown"||k==="ArrowRight"){e.preventDefault();pick((idx+1)%nn);}
+   else if(k==="ArrowUp"||k==="ArrowLeft"){e.preventDefault();pick((idx-1+nn)%nn);}
+   else if(k===" "||k==="Enter"){e.preventDefault();pick(idx);}});
+ })(i);})(groups[g]);
+var clears=document.querySelectorAll(".vk-rank-clear");
+for(var ci=0;ci<clears.length;ci++)clears[ci].addEventListener("click",function(){answers[this.getAttribute("data-clear")]=[];syncOpts();});
+
+/* ---- review ---- */
+function rankedList(q,names){if(answers[q][0]==="ABSTAIN")return"Abstain";
+ var out=[];for(var i=0;i<answers[q].length;i++)out.push((i+1)+". "+names[answers[q][i]]);return out.join(" — ");}
+$("to-review").addEventListener("click",function(){
+ if(!answers.q1||!answers.q2.length||!answers.q3.length||!answers.q6||!answers.q7.length||!answers.q8)return;
+ answers.text=($("q3-text").value||"").trim();
+ var pledges=[];for(var i=0;i<answers.pledges.length;i++)pledges.push(PLEDGE_NAME[answers.pledges[i]]);
+ $("review-rows").innerHTML=
+  "<div class='vk-rev-row'><p class='vk-rev-q'>1 · Endorse Eugene V. Debs for President?</p><p class='vk-rev-a'>"+esc(Q1_LABEL[answers.q1])+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>2 · Campaign structure — your ranking</p><p class='vk-rev-a is-text' style='font-weight:700;'>"+esc(rankedList("q2",Q2_NAME))+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>3 · The 1912 field — your ranking</p><p class='vk-rev-a is-text' style='font-weight:700;'>"+esc(rankedList("q3",Q3_NAME))+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>4 · Pledges</p><p class='vk-rev-a is-text'>"+(pledges.length?esc(pledges.join(", ")):"<em>— none —</em>")+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>5 · Your comment</p><p class='vk-rev-a is-text'>"+(answers.text?esc(answers.text):"<em>— none —</em>")+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>6 · Convention delegates — your ranking</p><p class='vk-rev-a is-text' style='font-weight:700;'>"+esc(rankedList("q7",Q7_NAME))+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>7 · Local issue 1</p><p class='vk-rev-a'>"+esc(answers.q6==="ABSTAIN"?"Abstain":answers.q6==="YES"?"Yes":"No")+"</p></div>"+
+  "<div class='vk-rev-row'><p class='vk-rev-q'>8 · Local issue 2</p><p class='vk-rev-a'>"+esc(answers.q8==="ABSTAIN"?"Abstain":answers.q8==="YES"?"Yes":"No")+"</p></div>";
+ $("prov-banner-review").hidden=!provisional;setErr($("cast-err"),"");show("scr-review");});
+$("back-btn").addEventListener("click",function(){show("scr-ballot");});
+
+/* ---- cast ---- */
+$("cast-btn").addEventListener("click",function(){
+ if(!answers.q1||!answers.q2.length||!answers.q3.length||!answers.q6||!answers.q7.length||!answers.q8)return;
+ if(!provisional&&!code)return;
+ var b=$("cast-btn");b.disabled=true;b.classList.add("loading");
+ var payload={q1:answers.q1,q2:answers.q2,q3:answers.q3,pledges:answers.pledges,q6:answers.q6,q7:answers.q7,q8:answers.q8,text:answers.text};
+ var body=provisional?{info:provInfo,answers:payload}:{code:code,answers:payload};
+ fetch(provisional?api("/provisional"):api("/vote"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+ .then(function(r){return r.json().then(function(d){return{s:r.status,d:d};});})
+ .then(function(res){b.disabled=false;b.classList.remove("loading");var d=res.d;
+  if(d.status==="recorded"||d.status==="provisional_recorded"){
+   $("done-choice").textContent="Your ballot — all "+8+" questions:";
+   $("done-votes").innerHTML=$("review-rows").innerHTML;
+   $("receipt-code").textContent=d.receipt;
+   var isProv=d.status==="provisional_recorded";
+   $("done-title").textContent=isProv?"Provisional Ballot Received":"Vote Recorded";
+   var w=$("done-warn");if(w){w.hidden=!isProv;if(isProv)w.innerHTML="<b class='vk-warn-t'>Not counted yet</b>Your ballot is sealed until National Membership verifies your eligibility. You’ll be notified either way.";}
+   $("help-link").href="mailto:orgtools@dsausa.org?subject="+encodeURIComponent("[BALLOT26] Voting help — receipt "+d.receipt);
+   show("scr-done");}
+  else if(d.status==="already_voted"){setErr($("cast-err"),"This code has already been used to vote. Votes are final.");}
+  else if(d.error==="invalid_answers"){setErr($("cast-err"),"Your ballot was missing an answer ("+(d.field||"?")+"). Go back and check each question.");}
+  else{setErr($("cast-err"),"Unable to record your vote. Please try again.");}})
+ .catch(function(){b.disabled=false;b.classList.remove("loading");setErr($("cast-err"),"Network error. Please try again.");});});
+
+syncOpts();
+if(EMBEDDED_CODE&&/^[A-Za-z0-9_-]{12,64}$/.test(EMBEDDED_CODE)){$("in-code").value=EMBEDDED_CODE;submitCode();}
+})();
+</script>
+</body>
+</html>
