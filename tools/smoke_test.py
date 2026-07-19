@@ -325,6 +325,40 @@ bad_qs = [{"key": "dup", "type": "yesno", "title": "A"},
 ok(c.post("/admin/api/polls/special_ref", headers=hdr, json={
     "name": "X", "questions": bad_qs}).status_code == 400, "duplicate question keys 400")
 
+# voters: import mints hashed codes + one-time manifest; list shows turnout
+r = c.post("/admin/api/polls/special_ref/voters/import", headers=hdr,
+           json={"members": [{"member_id": "AK101"}, {"member_id": "AK102"},
+                             {"member_id": "AK103"}]})
+ok(r.status_code == 200 and len(r.get_json()["created"]) == 3, "voter import creates codes")
+manifest = r.get_json()["created"]
+ok(all(("special_ref__codes", vote_service.code_hash(m["code"])) in DOCS for m in manifest),
+   "imported codes stored hashed only")
+ok(c.post("/admin/api/polls/special_ref/voters/import", headers=hdr,
+          json={"members": [{"member_id": "AK101"}]}).get_json()["skipped"] == 1,
+   "re-import skips existing members")
+ok(c.post("/admin/api/polls/special_ref/voters/import", headers=chi_hdr,
+          json={"members": [{"member_id": "AK999"}]}).status_code == 403,
+   "import is national-only")
+
+# vote with an imported code, then mark its doc used (as the real
+# transaction would) and confirm the voters view links code -> ballot
+m1 = manifest[0]
+r = c.post("/p/special_ref/vote", json={"code": m1["code"], "answers": {
+    "measure": "NO", "officer": ["B2"], "why": ""}})
+ok(r.status_code == 200, "imported-code vote accepted")
+DOCS[("special_ref__codes", vote_service.code_hash(m1["code"]))]["used"] = True
+r = c.get("/admin/api/polls/special_ref/voters", headers=hdr)
+vd = {v["member_id"]: v for v in r.get_json()["voters"]}
+ok(vd["AK101"]["voted"] and vd["AK101"]["ballot_received"] and vd["AK101"]["receipt"],
+   "voters: voted + ballot received + receipt")
+ok(not vd["AK102"]["voted"] and r.get_json()["integrity"]["used_codes_without_ballot"] == 0,
+   "voters: non-voter listed, integrity clean")
+ok(all("answers" not in v for v in vd.values()), "voters view never carries answers")
+DOCS[("special_ref__codes", vote_service.code_hash(manifest[2]["code"]))]["used"] = True
+r = c.get("/admin/api/polls/special_ref/voters", headers=hdr)
+ok(r.get_json()["integrity"]["used_codes_without_ballot"] == 1,
+   "integrity flags used code without stored ballot")
+
 # finalized polls can't be silently edited/reopened
 chi_body = dict(chi)
 ok(c.post("/admin/api/polls/debs_endorsement__chi", headers=hdr, json=chi_body).status_code == 409,

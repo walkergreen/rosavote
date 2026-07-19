@@ -1526,6 +1526,114 @@ def cron_closeout():
     return jsonify({"finalized": finalized}), 200
 
 
+# ---- admin: voters (turnout status — never how anyone voted) --------------
+VOTERS_LIST_CAP = 1000
+IMPORT_CAP = 20000
+
+
+@app.get("/admin/api/polls/<poll_id>/voters")
+def admin_list_voters(poll_id):
+    """Per-voter turnout: did each member's code get used, and did a ballot
+    record actually land for it (received-verification). NEVER exposes answer
+    content — only status, receipt, and void state. Includes an integrity
+    counter: used codes with no matching ballot record should always be 0."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    if not chapter_or_none(poll_id):
+        return jsonify({"error": "unknown_poll"}), 404
+    member_q = str(request.args.get("member_id", "")).strip()
+
+    ballots_by_code = {}
+    n_ballots = n_voided = 0
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        if d.get("voided"):
+            n_voided += 1
+        else:
+            n_ballots += 1
+        if d.get("code_hash"):
+            ballots_by_code[d["code_hash"]] = {"receipt": d.get("receipt"),
+                                               "voided": bool(d.get("voided"))}
+    voters, n_codes, n_used, n_missing = [], 0, 0, 0
+    for snap in db.collection(f"{poll_id}__codes").stream():
+        d = snap.to_dict() or {}
+        n_codes += 1
+        used = bool(d.get("used"))
+        if used:
+            n_used += 1
+        ballot = ballots_by_code.get(snap.id)
+        if used and not ballot and d.get("burned_by") != "provisional_adjudication":
+            n_missing += 1
+        if member_q and str(d.get("member_id", "")) != member_q:
+            continue
+        if len(voters) < VOTERS_LIST_CAP:
+            voters.append({"member_id": d.get("member_id"),
+                           "chapter": d.get("chapter"),
+                           "voted": used,
+                           "ballot_received": bool(ballot),
+                           "receipt": (ballot or {}).get("receipt"),
+                           "voided": (ballot or {}).get("voided", False),
+                           "reissued": bool(d.get("reissued_from")),
+                           "burned_by": d.get("burned_by")})
+    voters.sort(key=lambda v: (not v["voted"], str(v["member_id"])))
+    return jsonify({
+        "summary": {"codes": n_codes, "voted": n_used, "ballots": n_ballots,
+                    "voided": n_voided},
+        "integrity": {"used_codes_without_ballot": n_missing},
+        "truncated": n_codes > VOTERS_LIST_CAP and not member_q,
+        "voters": voters}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/voters/import")
+def admin_import_voters(poll_id):
+    """Import a chapter's voter roll (national admins only): mints one code
+    per NEW member, stores only the hash, and returns the plaintext manifest
+    exactly once — the console downloads it for the send platform; it is
+    never stored server-side. Members who already hold a code are skipped."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    data = request.get_json(silent=True) or {}
+    members = data.get("members") or []
+    if not isinstance(members, list) or not members:
+        return jsonify({"error": "bad_request", "message": "members list required"}), 400
+    if len(members) > IMPORT_CAP:
+        return jsonify({"error": "too_many",
+                        "message": f"cap is {IMPORT_CAP} members per import"}), 400
+
+    codes = db.collection(f"{poll_id}__codes")
+    existing = set()
+    for snap in codes.stream():
+        mid = (snap.to_dict() or {}).get("member_id")
+        if mid:
+            existing.add(str(mid))
+    created, skipped, bad = [], 0, 0
+    base = request.url_root.rstrip("/")
+    for m in members:
+        mid = str((m.get("member_id") if isinstance(m, dict) else m) or "").strip()
+        chapter = str((m.get("chapter") if isinstance(m, dict) else "") or "").strip() \
+            or cfg.get("name", "")
+        if not mid:
+            bad += 1
+            continue
+        if mid in existing:
+            skipped += 1
+            continue
+        existing.add(mid)
+        code = secrets.token_urlsafe(12)
+        codes.document(code_hash(code)).set({
+            "used": False, "member_id": mid, "chapter": chapter})
+        created.append({"member_id": mid, "chapter": chapter, "code": code,
+                        "vote_link": f"{base}/p/{poll_id}/v/{code}"})
+    _audit(poll_id, "voters_import", ident["name"],
+           created=len(created), skipped=skipped, bad=bad)
+    return jsonify({"created": created, "skipped": skipped, "bad": bad}), 200
+
+
 # ---- admin: provisional adjudication queue --------------------------------
 @app.get("/admin/api/polls/<poll_id>/provisionals")
 def admin_list_provisionals(poll_id):

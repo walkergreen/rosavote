@@ -84,13 +84,46 @@
     <div class="tabs">
       <button class="tab on" data-pane="polls-pane">Polls</button>
       <button class="tab" data-pane="builder-pane">Election Builder</button>
+      <button class="tab" data-pane="voters-pane">Voters</button>
       <button class="tab" data-pane="prov-pane">Provisionals</button>
       <button class="tab" data-pane="void-pane">Void &amp; Reissue</button>
     </div>
 
     <div class="card" id="polls-pane">
-      <div class="card-band">Polls<button class="btn ghost sm" id="refresh-btn">Refresh</button></div>
+      <div class="card-band">Polls<span>
+        <button class="btn ghost sm" id="new-election-btn">＋ Create election</button>
+        <button class="btn ghost sm" id="refresh-btn" style="margin-left:6px">Refresh</button></span></div>
       <div class="card-body" id="polls-list"><p>Loading…</p></div>
+    </div>
+
+    <div class="card hide" id="voters-pane">
+      <div class="card-band">Voters</div>
+      <div class="card-body">
+        <p>Turnout status per voter: whether their code was used and whether a
+        ballot record was <b>received and stored</b> for it — never how anyone
+        voted. The integrity check counts used codes with no stored ballot
+        (should always be 0).</p>
+        <label>Poll</label>
+        <select id="voters-poll"></select>
+        <div class="row" style="margin-top:10px">
+          <div><label>Search member ID (optional)</label>
+            <input type="text" id="voters-search" placeholder="AK12345"/></div>
+        </div>
+        <button class="btn dark sm" id="voters-load" style="margin-top:10px">Load voters</button>
+        <div id="voters-summary" style="margin-top:12px"></div>
+        <div id="voters-list" style="margin-top:8px"></div>
+        <div id="voters-msg"></div>
+        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+        <p class="kicker">Import voter roll (national admins)</p>
+        <p>Upload this chapter's member list as CSV (a <code>member_id</code>
+        column, or member IDs in the first column). One code is minted per new
+        member — the code manifest downloads <b>once</b> and is never stored;
+        deliver it through the send platform. Members already holding a code
+        are skipped.</p>
+        <input type="file" id="import-file" accept=".csv,text/csv"/>
+        <button class="btn sm" id="import-btn" style="margin-top:10px">Import &amp; download codes</button>
+        <div id="import-msg"></div>
+      </div>
     </div>
 
     <div class="card hide" id="builder-pane">
@@ -231,10 +264,11 @@ $("login-btn").onclick = function(){
 $("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); location.reload(); };
 
 // ---- tabs ----
+var PANES = ["polls-pane","builder-pane","voters-pane","prov-pane","void-pane"];
 Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){
   t.onclick = function(){
     Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(x){ x.classList.remove("on"); });
-    ["polls-pane","builder-pane","prov-pane","void-pane"].forEach(function(p){ $(p).classList.add("hide"); });
+    PANES.forEach(function(p){ $(p).classList.add("hide"); });
     t.classList.add("on"); $(t.dataset.pane).classList.remove("hide");
   };
 });
@@ -266,12 +300,19 @@ function loadPolls(){
       btns.appendChild(edit); btns.appendChild(close); div.appendChild(btns);
       $("polls-list").appendChild(div);
     });
-    ["prov-poll","void-poll"].forEach(function(sel){
+    ["prov-poll","void-poll","voters-poll"].forEach(function(sel){
       $(sel).innerHTML = ids.map(function(pid){ return "<option value='"+esc(pid)+"'>"+esc(POLLS[pid].name)+" ("+esc(pid)+")</option>"; }).join("");
     });
   });
 }
 $("refresh-btn").onclick = loadPolls;
+$("new-election-btn").onclick = function(){
+  document.querySelector('[data-pane="builder-pane"]').click();
+  ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions"].forEach(function(id){ $(id).value=""; });
+  $("b-tz").value = "America/New_York"; $("b-app").checked = false;
+  editingLegacy = null; msg("b-msg","","");
+  $("b-pid").focus();
+};
 
 // ---- builder ----
 var editingLegacy = null;   // legacy q6/q8/q7 of the poll being edited (passthrough)
@@ -353,6 +394,98 @@ $("b-save").onclick = function(){
       msg("b-msg","err","Not saved:\n- "+e);
     }
   });
+};
+
+// ---- voters ----
+function loadVoters(){
+  var pid = $("voters-poll").value;
+  var q = $("voters-search").value.trim();
+  msg("voters-msg","warn","Loading…");
+  api("/admin/api/polls/"+pid+"/voters"+(q?("?member_id="+encodeURIComponent(q)):"")).then(function(r){
+    if(r.status!==200){ msg("voters-msg","err","Failed: "+JSON.stringify(r.body)); return; }
+    msg("voters-msg","","");
+    var s = r.body.summary, integ = r.body.integrity;
+    var integCls = integ.used_codes_without_ballot ? "err" : "okc";
+    $("voters-summary").innerHTML =
+      "<span class='chip'>"+s.codes+" codes</span> <span class='chip open'>"+s.voted+" voted</span> "+
+      "<span class='chip'>"+s.ballots+" ballots stored</span> <span class='chip closed'>"+s.voided+" voided</span>"+
+      "<div class='msg "+integCls+"' style='margin-top:8px'>Integrity: "+integ.used_codes_without_ballot+
+      " used code(s) without a stored ballot"+(integ.used_codes_without_ballot?" — INVESTIGATE":" ✓")+"</div>"+
+      (r.body.truncated ? "<div class='msg warn'>List capped at 1000 rows — use member ID search for the rest.</div>" : "");
+    var list = $("voters-list"); list.innerHTML = r.body.voters.length ? "" : "<p>No voters imported yet.</p>";
+    r.body.voters.forEach(function(v){
+      var row = document.createElement("div"); row.className="poll";
+      var status = v.voted
+        ? (v.ballot_received
+            ? (v.voided ? "<span class='chip closed'>voided</span>" : "<span class='chip open'>voted ✓ received</span>")
+            : (v.burned_by==="provisional_adjudication" ? "<span class='chip'>provisional</span>"
+               : "<span class='chip closed'>used — NO BALLOT</span>"))
+        : "<span class='chip not_open'>not voted</span>";
+      row.innerHTML = "<div><b>"+esc(v.member_id||"?")+"</b> "+status+(v.reissued?" <span class='chip'>reissued</span>":"")+
+        "<br/><small>"+esc(v.chapter||"")+(v.receipt?(" &middot; receipt "+esc(v.receipt)):"")+"</small></div>";
+      if(v.voted && v.ballot_received && !v.voided){
+        var vb = document.createElement("button"); vb.className="btn dark sm"; vb.textContent="Void & reissue";
+        vb.onclick = function(){
+          if(!confirm("Void "+v.member_id+"'s ballot ("+v.receipt+") and reissue a fresh code?")) return;
+          var reason = prompt("Reason — one of: stolen_code, technical_failure, provisional_adjudication", "stolen_code");
+          if(!reason) return;
+          api("/p/"+pid+"/admin/void", {method:"POST", body:JSON.stringify({receipt:v.receipt, reason:reason})}).then(function(r2){
+            if(r2.status===200){
+              msg("voters-msg","okc","Voided "+v.receipt+". NEW CODE (shown once): "+r2.body.new_code);
+              loadVoters();
+            } else msg("voters-msg","err","Void failed: "+JSON.stringify(r2.body));
+          });
+        };
+        row.appendChild(vb);
+      }
+      list.appendChild(row);
+    });
+  });
+}
+$("voters-load").onclick = loadVoters;
+$("voters-search").addEventListener("keydown", function(e){ if(e.key==="Enter") loadVoters(); });
+
+$("import-btn").onclick = function(){
+  var f = $("import-file").files[0];
+  var pid = $("voters-poll").value;
+  if(!f){ msg("import-msg","err","Choose a CSV file first."); return; }
+  var reader = new FileReader();
+  reader.onload = function(){
+    var lines = String(reader.result).split(/\r?\n/).filter(function(l){ return l.trim(); });
+    if(!lines.length){ msg("import-msg","err","Empty file."); return; }
+    var header = lines[0].split(",").map(function(h){ return h.trim().toLowerCase().replace(/^"|"$/g,""); });
+    var idCol = header.indexOf("member_id");
+    var rows = lines.slice(idCol===-1 ? 0 : 1);
+    if(idCol===-1) idCol = 0;
+    var members = [];
+    rows.forEach(function(l){
+      var cells = l.split(",");
+      var mid = (cells[idCol]||"").trim().replace(/^"|"$/g,"");
+      if(mid) members.push({member_id: mid});
+    });
+    if(!members.length){ msg("import-msg","err","No member IDs found."); return; }
+    if(!confirm("Mint codes for up to "+members.length+" member(s) of "+POLLS[pid].name+
+      "? Existing members are skipped. The code file downloads ONCE.")) return;
+    msg("import-msg","warn","Importing "+members.length+" member(s)…");
+    api("/admin/api/polls/"+pid+"/voters/import", {method:"POST", body:JSON.stringify({members:members})}).then(function(r){
+      if(r.status!==200){ msg("import-msg","err","Import failed: "+JSON.stringify(r.body)); return; }
+      var created = r.body.created;
+      if(created.length){
+        var csv = "member_id,chapter,code,vote_link\n" + created.map(function(c){
+          return [c.member_id, '"'+String(c.chapter).replace(/"/g,'""')+'"', c.code, c.vote_link].join(",");
+        }).join("\n");
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+        a.download = pid + "_code_manifest.csv";
+        a.click(); URL.revokeObjectURL(a.href);
+      }
+      msg("import-msg","okc","Imported "+created.length+" new voter(s); skipped "+r.body.skipped+
+        " already-imported; "+r.body.bad+" blank/bad row(s)."+
+        (created.length ? " Code manifest downloaded — deliver via the send platform; it cannot be re-downloaded." : ""));
+      loadVoters();
+    });
+  };
+  reader.readAsText(f);
 };
 
 // ---- provisionals ----

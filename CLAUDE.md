@@ -46,8 +46,11 @@ gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
   `config__polls` via `load_polls()` (60s cache); the in-code `CHAPTERS` dict
   is only the fallback seed until `tools/seed_config.py polls` has run.
 - `admin_console.html` — single-file branded console served at `/admin/`
-  (token sign-in, polls list, builder, adjudication, void). Static shell;
-  every API it calls is token-gated.
+  (token sign-in, polls list + create-election, builder w/ questions JSON +
+  presets, VOTERS tab: per-voter turnout + received-verification + integrity
+  counter + row void + national-only CSV roll import minting hashed codes
+  with a one-time manifest download, adjudication, void). Static shell;
+  every API it calls is token-gated. Voters view never exposes answers.
 - `ballot_template.html` — single-file branded ballot (all CSS/JS inline).
   Server injects: `__POLL_ID__ __CHAPTER_NAME__ __CODE__ __Q6_QUESTION__
   __Q8_QUESTION__ __Q7_OPTIONS__ __Q7_NOTE__ __Q7_SEATS__ __Q7_ALTS__
