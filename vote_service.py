@@ -2058,9 +2058,11 @@ def admin_import_voters_bigquery(poll_id):
         return jsonify({"error": "bad_request", "message": "chapter required"}), 400
     project = str(data.get("roll_project") or "proj-tmc-mem-dsa")
     dataset = str(data.get("roll_dataset") or "main")
+    job_project = str(data.get("job_project") or "dsa-org-tools")
     try:
         from google.cloud import bigquery
-        client = bigquery.Client(project=project)
+        # jobs bill/run in our project; the roll is read cross-project
+        client = bigquery.Client(project=job_project)
         job = client.query(
             ROLL_IMPORT_QUERY.format(roll=f"{project}.{dataset}"),
             job_config=bigquery.QueryJobConfig(query_parameters=[
