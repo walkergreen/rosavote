@@ -675,7 +675,7 @@ RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
 
 
 _PUB_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — Results — DSA Vote</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — Results — DSA Vote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <style>*{{box-sizing:border-box}}body{{font:16px/1.5 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
 .banner{{background:#dd1111;color:#fff5e5;padding:14px 18px;font-family:"Arial Narrow",sans-serif;
 font-weight:bold;text-transform:uppercase;font-size:1.4rem}}.banner small{{display:block;font-size:.85rem;opacity:.9}}
@@ -692,7 +692,7 @@ h2{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:0 0 8p
 font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#dd1111;font-weight:700}}
 footer{{text-align:center;font:12px system-ui,sans-serif;color:rgba(0,0,0,.55);padding:16px}}
 a{{color:#dd1111}}</style></head><body>
-<div class="banner">🌹 DSA Vote<small>{title} — Official Results</small></div>
+<div class="banner"><img src="/logo.svg" alt="" style="height:30px;vertical-align:-8px;margin-right:6px"/>DSA Vote<small>{title} — Official Results</small></div>
 <main>{body}</main>
 <footer><b>DSA Vote</b> · results certified by the body conducting the election ·
 <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a><br/>Built with 🌹 by Walker Green</footer>
@@ -858,6 +858,7 @@ def provisional(poll_id):
 SPLASH = """<!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>DSA Vote — Chapter Member Ballot</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -897,7 +898,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
 </style></head><body>
 <header class="band"><div class="band-in">
   <div class="wm">DSA Vote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
-  <a class="rose" href="/" style="color:inherit;text-decoration:none;display:block;font-size:1.3rem;line-height:1;">🌹</a>
+  <a class="rose" href="/" aria-label="DSA Vote home" style="border:none;padding:0;display:flex;"><img src="/logo.svg" alt="" width="34" height="34"/></a>
 </div></header>
 <main>
   <div class="marks"></div>
@@ -1800,6 +1801,36 @@ def admin_save_poll(poll_id):
     _audit(poll_id, "config_save", ident["name"])
     load_polls(force=True)
     return jsonify({"ok": True, "warnings": warnings}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/open")
+def admin_open_poll(poll_id):
+    """Open-election button: start voting NOW — with or without a schedule.
+    Sets opens_at to now; a close time already in the past is cleared (the
+    poll runs until closed). Chapter admins may open their own poll, same
+    as closing. Finalized polls stay shut — reopening a certified election
+    is the deliberate national unfinalize flow, not this button."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    if cfg.get("finalized"):
+        return jsonify({"error": "finalized",
+                        "message": "This election is finalized. Reopening it is the "
+                                   "deliberate unfinalize flow (national admins, "
+                                   "Reopen button)."}), 409
+    now = int(time.time())
+    closes = cfg.get("closes_at")
+    if closes and closes <= now:
+        closes = None            # stale close time — run until closed
+    cfg = dict(cfg, opens_at=now - 1, closes_at=closes)
+    db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
+    _audit(poll_id, "open_poll", ident["name"])
+    load_polls(force=True)
+    return jsonify({"ok": True, "opens_at": cfg["opens_at"],
+                    "closes_at": cfg["closes_at"]}), 200
 
 
 @app.post("/admin/api/polls/<poll_id>/close")
@@ -2888,14 +2919,14 @@ def admin_void(poll_id):
 
 
 _LEGAL_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — DSA Vote</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — DSA Vote</title><link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <style>body{{font:16px/1.55 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
 main{{max-width:640px;margin:0 auto;padding:24px 18px 60px}}
 h1{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase}}h2{{font-size:1.05rem}}
 .banner{{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;
 font-weight:bold;text-transform:uppercase}} .draft{{background:#ffe1b2;border:1px solid #000;
 padding:8px 12px;font-size:.85rem}} a{{color:#dd1111}}</style></head><body>
-<div class="banner">DSA Vote 🌹</div><main><h1>{title}</h1>
+<div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>DSA Vote</div><main><h1>{title}</h1>
 <p class="draft">DRAFT — prototype language pending review by DSA staff and counsel.
 This service is a prototype and not a live election unless explicitly announced.</p>
 {body}<p><a href="/">&larr; Back to DSA Vote</a></p></main></body></html>"""
@@ -2958,6 +2989,27 @@ ballot files are anonymous.</p>
 <h2>Contact</h2>
 <p>Questions or concerns: orgtools@dsausa.org.</p>
 """
+
+
+LOGO_SVG = """<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect x="9" y="9" width="50" height="50" fill="#dd1111"/>
+  <rect x="4" y="4" width="50" height="50" fill="#fff5e5" stroke="#000" stroke-width="2"/>
+  <circle cx="29" cy="16.5" r="8" fill="#dd1111" stroke="#000" stroke-width="2.2"/>
+  <path d="M29 12 c 2.7 0 4.5 1.8 4.5 4 0 2.4-2 4.2-4.5 4.2 s-4.5-1.8-4.5-4.2" fill="none" stroke="#fff5e5" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M29 14.8 c 1.1 0 1.9.7 1.9 1.7" fill="none" stroke="#fff5e5" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M29 24.5 V 38.5" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M28 30.5 C 25 30 22.8 28.3 22 25.7 C 25.2 26.1 27.4 27.8 28 30.5 z" fill="#dd1111" stroke="#000" stroke-width="1.6"/>
+  <path d="M30 34.5 C 33 34 35.2 32.3 36 29.7 C 32.8 30.1 30.6 31.8 30 34.5 z" fill="#dd1111" stroke="#000" stroke-width="1.6"/>
+  <rect x="20" y="37.5" width="18" height="4" fill="#000"/>
+  <rect x="14" y="39" width="30" height="11.5" fill="#dd1111" stroke="#000" stroke-width="2.2"/>
+  <path d="M18.5 45 h 21" stroke="#fff5e5" stroke-width="2" stroke-linecap="round"/>
+</svg>"""
+
+
+@app.get("/logo.svg")
+def logo():
+    return Response(LOGO_SVG, mimetype="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/terms")

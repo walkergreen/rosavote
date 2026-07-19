@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Admin Console — DSA Vote</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -32,7 +33,20 @@
   .btn.dark{background:#000}.btn.dark:hover{background:#333}
   .btn.ghost{background:#fff;color:var(--ink)}.btn.ghost:hover{background:var(--tan)}
   .btn.sm{min-height:34px;font-size:.95rem;padding:4px 12px;margin-top:0}
-  .row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:140px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:140px;max-width:100%}
+  input[type=datetime-local],input[type=date]{min-width:0;max-width:100%;-webkit-appearance:none;appearance:none}
+  @media (max-width:560px){
+    .row{flex-direction:column}.row>div{min-width:0}
+    .poll{display:block}.poll>div:last-child{margin-top:8px}
+    .rb-name{flex-basis:110px}.card-band{flex-wrap:wrap}
+  }
+  .poll small{overflow-wrap:anywhere}
+  .qcard{border:1px solid var(--ink);background:#fff;padding:8px 10px;margin:0 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .qcard b{font-family:var(--disp);text-transform:uppercase}
+  .qcard .qtype{font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:var(--tan);border:1px solid var(--ink);padding:2px 6px}
+  .optrow{display:flex;gap:6px;margin:0 0 6px;flex-wrap:wrap}
+  .optrow input{flex:1;min-width:90px}
+  #q-editor{border:2px solid var(--dsa);padding:12px;background:var(--cream);margin:10px 0}
   .chip{font-family:var(--disp);font-weight:800;font-size:.8rem;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border:1px solid var(--ink)}
   .chip.open{background:#c9f3c9}.chip.closed{background:#f3c9c9}.chip.not_open{background:var(--tan)}
   .poll{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--ink);margin:0 0 10px;background:#fff;flex-wrap:wrap}
@@ -67,7 +81,7 @@
 </style></head><body>
 <header class="band"><div class="band-in">
   <div class="wm">Admin Console<small>DSA Vote 🌹</small></div>
-  <a class="rose" href="/" style="font-size:1.3rem;line-height:1;">🌹</a>
+  <a class="rose" href="/" aria-label="DSA Vote home" style="border:none;padding:0;display:flex;"><img src="/logo.svg" alt="" width="34" height="34"/></a>
 </div></header>
 <main>
   <div class="marks"></div>
@@ -216,30 +230,71 @@
         </div>
         <label>Test code (optional, repeatable, never recorded)</label>
         <input type="text" id="b-test"/>
-        <label>Questions (JSON list — the whole ballot, in order)</label>
-        <div class="row" style="margin:0 0 6px">
-          <button class="btn ghost sm" data-preset="referendum">+ Referendum</button>
-          <button class="btn ghost sm" data-preset="officer">+ Officer election</button>
-          <button class="btn ghost sm" data-preset="delegates">+ Delegate election</button>
-          <button class="btn ghost sm" data-preset="leadership">+ Leadership w/ quotas</button>
-          <button class="btn ghost sm" data-preset="feedback">+ Free-text</button>
-          <button class="btn ghost sm" data-preset="pledges">+ Multi-select</button>
+        <label>Ballot questions</label>
+        <div id="q-list"><p><small>No questions yet — add one below or use a template.</small></p></div>
+        <div class="row" style="margin:0 0 4px">
+          <button class="btn sm" id="q-add-yesno" style="margin-top:0">＋ Yes / No measure</button>
+          <button class="btn sm" id="q-add-ranked" style="margin-top:0">＋ Ranked election</button>
+          <button class="btn sm" id="q-add-multi" style="margin-top:0">＋ Multi-select</button>
+          <button class="btn sm" id="q-add-text" style="margin-top:0">＋ Free-text</button>
         </div>
-        <textarea id="b-questions" style="min-height:220px" placeholder='[
-  {"key": "measure_1", "type": "yesno", "title": "Shall the chapter…?"}
-]'></textarea>
-        <label>Quota groups JSON (optional — full-body requirements across contests)</label>
-        <textarea id="b-qgroups" style="min-height:60px" placeholder='{"body": [{"tag":"cis_man","max":13,"label":"No more than 13 cis men"},{"tag":"marginalized","min":8}]}'></textarea>
-        <p style="font-size:.78rem;margin:6px 0 0">Give a question <code>"quota_group":"body"</code>
-        to count its seats toward the group requirement (e.g. co-chairs + at-large together).
-        Candidates in quota contests must carry a <code>tags</code> list (may be empty =
-        attributes collected, none apply).</p>
-        <p style="font-size:.78rem;margin:6px 0 0">Types: <code>yesno</code> ·
-        <code>ranked</code> (options, seats, alternates; <code>"method":"meek"</code> for Meek STV
-        — required for YDSA delegate elections; <code>secret</code> hides identity;
-        <code>delegate</code> additionally enforces Art. V) · <code>multi</code> ·
-        <code>text</code>. Leave empty on a legacy demo poll to keep its built-in
-        8-question ballot.</p>
+        <p style="font-size:.75rem;margin:2px 0 6px">Templates:</p>
+        <div class="row" style="margin:0 0 6px">
+          <button class="btn ghost sm" data-preset="referendum">Referendum</button>
+          <button class="btn ghost sm" data-preset="officer">Officer election</button>
+          <button class="btn ghost sm" data-preset="delegates">Delegate election</button>
+          <button class="btn ghost sm" data-preset="leadership">Leadership w/ quotas</button>
+          <button class="btn ghost sm" data-preset="feedback">Free-text</button>
+          <button class="btn ghost sm" data-preset="pledges">Multi-select</button>
+        </div>
+
+        <div id="q-editor" class="hide">
+          <p class="kicker" id="qe-heading">Question</p>
+          <label>Question title (what voters see)</label>
+          <input type="text" id="qe-title" placeholder="Shall the chapter …?"/>
+          <label>Short label <small>(optional — shown beside the question number)</small></label>
+          <input type="text" id="qe-label" placeholder="Ballot measure"/>
+          <label>Description <small>(optional — paragraphs separated by a blank line)</small></label>
+          <textarea id="qe-desc" style="min-height:70px;font-family:var(--ui)"></textarea>
+          <div id="qe-ranked">
+            <div class="row">
+              <div><label>Seats to elect</label><input type="number" id="qe-seats" min="1" value="1"/></div>
+              <div><label>Alternates <small>(two-count)</small></label><input type="number" id="qe-alts" min="0" value="0"/></div>
+              <div><label>Counting method</label><select id="qe-method">
+                <option value="scottish">Scottish STV</option>
+                <option value="meek">Meek STV (YDSA delegates)</option></select></div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/></div>
+              <div><label style="display:inline">Delegate election (Art. V) </label><input type="checkbox" id="qe-delegate" style="width:18px;height:18px"/></div>
+              <div><label style="display:inline">Shuffle order per voter </label><input type="checkbox" id="qe-shuffle" style="width:18px;height:18px" checked/></div>
+            </div>
+          </div>
+          <div id="qe-optwrap">
+            <label id="qe-optlabel">Candidates / options</label>
+            <div id="qe-opts"></div>
+            <button class="btn ghost sm" id="qe-addopt" type="button">＋ Add option</button>
+            <p style="font-size:.72rem;margin:4px 0 0" id="qe-taghint">Attribute tags (comma-separated, e.g.
+            <code>cis_man, white</code>) matter only for quota-constrained elections — leave blank otherwise.</p>
+          </div>
+          <div id="qe-textwrap">
+            <label>Character limit</label>
+            <input type="number" id="qe-max" min="1" max="10000" value="1000"/>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn sm" id="qe-save" type="button" style="margin-top:0">Done — keep question</button>
+            <button class="btn ghost sm" id="qe-cancel" type="button">Cancel</button>
+          </div>
+        </div>
+
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;font-size:.78rem;font-weight:700;color:var(--dsa)">Advanced — raw JSON (questions, quota groups)</summary>
+          <label>Questions JSON <small>(generated from the builder above; edit + Apply to override)</small></label>
+          <textarea id="b-questions" style="min-height:140px"></textarea>
+          <button class="btn ghost sm" id="b-apply-json" type="button" style="margin-top:6px">Apply JSON to builder</button>
+          <label style="margin-top:10px">Quota groups JSON <small>(full-body requirements across contests — give questions "quota_group":"body")</small></label>
+          <textarea id="b-qgroups" style="min-height:60px" placeholder='{"body": [{"tag":"cis_man","max":13,"label":"No more than 13 cis men"}]}'></textarea>
+        </details>
         <button class="btn" id="b-save">Save poll</button>
         <div id="b-msg"></div>
       </div>
@@ -494,19 +549,19 @@ function loadPolls(){
         "<code>"+esc(pid)+"</code><br/><small>opens "+esc(fmtTs(c.opens_at, c.timezone))+" &middot; closes "+esc(fmtTs(c.closes_at, c.timezone))+
         " &middot; "+esc(c.timezone||"America/New_York")+"</small></div>";
       var btns = document.createElement("div");
-      if(window.IDENT && window.IDENT.role==="national" && c.state==="not_open"){
-        var st = document.createElement("button"); st.className="btn sm"; st.textContent="Start now";
+      if(c.state!=="open" && !c.finalized){
+        var st = document.createElement("button"); st.className="btn sm"; st.textContent="Open election";
         st.style.marginRight="6px";
         st.onclick = function(){
-          if(!confirm("Open voting for "+c.name+" NOW (overriding the scheduled open)?")) return;
-          api("/admin/api/polls/"+pid, {method:"POST",
-              body: JSON.stringify(cfgBody(pid, {opens_at: Math.floor(Date.now()/1000)-5}))}).then(function(r2){
-            if(r2.status===200) loadPolls(); else alert("Start failed: "+JSON.stringify(r2.body));
+          if(!confirm("OPEN voting for "+c.name+" now"+
+              (c.state==="not_open" ? " (overriding the scheduled open)?" : "? Any past close time is cleared — the election runs until you close it."))) return;
+          api("/admin/api/polls/"+pid+"/open", {method:"POST", body:"{}"}).then(function(r2){
+            if(r2.status===200) loadPolls(); else alert("Open failed: "+(r2.body.message||JSON.stringify(r2.body)));
           });
         };
         btns.appendChild(st);
       }
-      if(window.IDENT && window.IDENT.role==="national" && c.state==="closed"){
+      if(window.IDENT && window.IDENT.role==="national" && c.state==="closed" && c.finalized){
         var ro = document.createElement("button"); ro.className="btn sm"; ro.textContent="Reopen";
         ro.style.marginRight="6px";
         ro.onclick = function(){
@@ -518,6 +573,15 @@ function loadPolls(){
         };
         btns.appendChild(ro);
       }
+      var vr = document.createElement("button"); vr.className="btn ghost sm"; vr.textContent="View results";
+      vr.style.marginRight="6px";
+      vr.onclick = function(){
+        document.querySelector('[data-pane="results-pane"]').click();
+        $("results-poll").value = pid;
+        loadResults(false);
+        window.scrollTo(0,0);
+      };
+      btns.appendChild(vr);
       var edit = document.createElement("button"); edit.className="btn ghost sm"; edit.textContent="Edit";
       edit.onclick = function(){ fillBuilder(pid, c); };
       var close = document.createElement("button"); close.className="btn dark sm"; close.style.marginLeft="6px"; close.textContent="Close now";
@@ -550,6 +614,7 @@ $("refresh-btn").onclick = loadPolls;
 $("new-election-btn").onclick = function(){
   document.querySelector('[data-pane="builder-pane"]').click();
   ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions","b-qgroups"].forEach(function(id){ $(id).value=""; });
+  BQ = []; $("q-editor").classList.add("hide"); editIdx = null; renderQList();
   $("b-tz").value = "America/New_York"; $("b-app").checked = false;
   editingLegacy = null; msg("b-msg","","");
   syncArt5();
@@ -574,11 +639,12 @@ function fillBuilder(pid, c){
   $("b-closes").value = tsToNaive(c.closes_at, $("b-tz").value);
   $("b-conv").value = c.convention_date || ""; $("b-app").checked = !!c.apportionment_done;
   $("b-test").value = c.test_code || "";
-  $("b-questions").value = c.questions ? JSON.stringify(c.questions, null, 2) : "";
   $("b-qgroups").value = c.quota_groups ? JSON.stringify(c.quota_groups, null, 2) : "";
   editingLegacy = c.questions ? null : {q6: c.q6, q8: c.q8, q7: c.q7};
+  BQ = c.questions ? JSON.parse(JSON.stringify(c.questions)) : [];
+  $("q-editor").classList.add("hide"); editIdx = null;
   msg("b-msg","","");
-  syncArt5();
+  renderQList();
 }
 var PRESETS = {
   referendum: {key:"measure_N", type:"yesno", label:"Ballot measure",
@@ -607,18 +673,147 @@ var PRESETS = {
   pledges: {key:"pledges_N", type:"multi", label:"Check all that apply — optional",
     title:"I pledge to…", options:[{id:"OPT1",name:"Option One"},{id:"OPT2",name:"Option Two"}]}
 };
+var BQ = [];            // builder questions — source of truth
+var editIdx = null;
+
+function slugKey(title){
+  var base = String(title||"q").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,24) || "q";
+  if(!/^[a-z]/.test(base)) base = "q_"+base;
+  var k = base, n = 2;
+  while(BQ.some(function(q,i){ return q.key===k && i!==editIdx; })){ k = base+"_"+n; n++; }
+  return k;
+}
+function optId(name, taken){
+  var base = String(name||"OPT").toUpperCase().replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,28) || "OPT";
+  if(base.length<2) base = base+"1";
+  var k = base, n = 2;
+  while(taken.indexOf(k)!==-1){ k = base+"_"+n; n++; }
+  return k;
+}
+var TYPE_NAMES = {yesno:"Yes / No", ranked:"Ranked", multi:"Multi-select", text:"Free text"};
+function renderQList(){
+  var el = $("q-list");
+  if(!BQ.length){
+    el.innerHTML = editingLegacy && editingLegacy.q7
+      ? "<p><small>This poll uses the built-in legacy demo ballot. Add questions to replace it, or leave as-is.</small></p>"
+      : "<p><small>No questions yet — add one below or use a template.</small></p>";
+  } else {
+    el.innerHTML = "";
+    BQ.forEach(function(q, i){
+      var d = document.createElement("div"); d.className = "qcard";
+      d.innerHTML = "<span class='qtype'>"+esc(TYPE_NAMES[q.type]||q.type)+"</span><b>"+(i+1)+".</b> "+esc(q.title||"(untitled)")+
+        (q.type==="ranked" ? " <small>"+q.seats+" seat(s)"+(q.method==="meek"?" · Meek":"")+(q.secret?" · secret":"")+(q.delegate?" · delegate":"")+
+          ((q.options||[]).length?" · "+q.options.length+" candidates":"")+"</small>" :
+         q.type==="multi" ? " <small>"+((q.options||[]).length)+" options</small>" : "");
+      var grp = document.createElement("span"); grp.style.marginLeft = "auto";
+      [["Edit", function(){ openEditor(q.type, i); }],
+       ["↑", function(){ if(i>0){ BQ.splice(i-1,0,BQ.splice(i,1)[0]); renderQList(); } }],
+       ["↓", function(){ if(i<BQ.length-1){ BQ.splice(i+1,0,BQ.splice(i,1)[0]); renderQList(); } }],
+       ["✕", function(){ if(confirm("Remove question \""+(q.title||"")+"\"?")){ BQ.splice(i,1); renderQList(); } }]
+      ].forEach(function(spec){
+        var b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = spec[0];
+        b.style.marginLeft = "4px"; b.onclick = spec[1]; grp.appendChild(b);
+      });
+      d.appendChild(grp); el.appendChild(d);
+    });
+  }
+  $("b-questions").value = BQ.length ? JSON.stringify(BQ, null, 2) : "";
+  syncArt5();
+}
+function addOptRow(o){
+  o = o || {};
+  var row = document.createElement("div"); row.className = "optrow";
+  row.innerHTML = "<input type='text' class='o-name' placeholder='Name' value='"+esc(o.name||"")+"'/>"+
+    "<input type='text' class='o-sub' placeholder='Subtitle (optional)' value='"+esc(o.sub||"")+"'/>"+
+    "<input type='text' class='o-tags' placeholder='Tags (optional)' value='"+esc((o.tags||[]).join(", "))+"'/>";
+  var x = document.createElement("button"); x.className = "btn ghost sm"; x.textContent = "✕"; x.type = "button";
+  x.onclick = function(){ row.remove(); };
+  row.appendChild(x);
+  if(o.id) row.dataset.oid = o.id;
+  $("qe-opts").appendChild(row);
+}
+function openEditor(type, idx){
+  editIdx = (idx===undefined ? null : idx);
+  var q = editIdx===null ? {type:type} : BQ[editIdx];
+  $("qe-heading").textContent = (editIdx===null?"New ":"Edit ")+(TYPE_NAMES[type]||type)+" question";
+  $("qe-title").value = q.title||""; $("qe-label").value = q.label||"";
+  $("qe-desc").value = (q.text||[]).join("\n\n");
+  $("qe-ranked").style.display = type==="ranked" ? "" : "none";
+  $("qe-optwrap").style.display = (type==="ranked"||type==="multi") ? "" : "none";
+  $("qe-textwrap").style.display = type==="text" ? "" : "none";
+  $("qe-optlabel").textContent = type==="ranked" ? "Candidates" : "Options";
+  if(type==="ranked"){
+    $("qe-seats").value = q.seats||1; $("qe-alts").value = q.alternates||0;
+    $("qe-method").value = q.method||"scottish";
+    $("qe-secret").checked = !!q.secret; $("qe-delegate").checked = !!q.delegate;
+    $("qe-shuffle").checked = q.shuffle!==false;
+  }
+  if(type==="text") $("qe-max").value = q.max||1000;
+  $("qe-opts").innerHTML = "";
+  ((q.options)||[]).forEach(addOptRow);
+  if((type==="ranked"||type==="multi") && !(q.options||[]).length){ addOptRow(); addOptRow(); }
+  $("q-editor").dataset.qtype = type;
+  $("q-editor").classList.remove("hide");
+  $("qe-title").focus();
+}
+$("qe-addopt").onclick = function(){ addOptRow(); };
+$("qe-cancel").onclick = function(){ $("q-editor").classList.add("hide"); editIdx = null; };
+$("qe-save").onclick = function(){
+  var type = $("q-editor").dataset.qtype;
+  var title = $("qe-title").value.trim();
+  if(!title){ alert("Give the question a title."); return; }
+  var q = {key: (editIdx!==null && BQ[editIdx].key) || slugKey(title), type: type, title: title};
+  var label = $("qe-label").value.trim(); if(label) q.label = label;
+  var desc = $("qe-desc").value.trim();
+  if(desc) q.text = desc.split(/\n\s*\n/).map(function(p){ return p.trim(); }).filter(Boolean);
+  if(type==="ranked"||type==="multi"){
+    var taken = [], opts = [];
+    Array.prototype.forEach.call($("qe-opts").children, function(row){
+      var name = row.querySelector(".o-name").value.trim();
+      if(!name) return;
+      var id = row.dataset.oid || optId(name, taken);
+      taken.push(id);
+      var o = {id: id, name: name};
+      var sub = row.querySelector(".o-sub").value.trim(); if(sub) o.sub = sub;
+      var tags = row.querySelector(".o-tags").value.trim();
+      if(tags) o.tags = tags.split(",").map(function(t){ return t.trim(); }).filter(Boolean);
+      else if(row.querySelector(".o-tags").value !== "" || (editIdx!==null && (BQ[editIdx].constraints||BQ[editIdx].quota_group))) o.tags = [];
+      opts.push(o);
+    });
+    if(!opts.length){ alert("Add at least one "+(type==="ranked"?"candidate":"option")+"."); return; }
+    q.options = opts;
+  }
+  if(type==="ranked"){
+    q.seats = parseInt($("qe-seats").value,10)||1;
+    q.alternates = parseInt($("qe-alts").value,10)||0;
+    q.method = $("qe-method").value;
+    if($("qe-secret").checked) q.secret = true;
+    if($("qe-delegate").checked){ q.delegate = true; q.secret = true; }
+    q.shuffle = $("qe-shuffle").checked;
+    if(editIdx!==null && BQ[editIdx].constraints) q.constraints = BQ[editIdx].constraints;
+    if(editIdx!==null && BQ[editIdx].quota_group) q.quota_group = BQ[editIdx].quota_group;
+  }
+  if(type==="text") q.max = parseInt($("qe-max").value,10)||1000;
+  if(editIdx===null) BQ.push(q); else BQ[editIdx] = q;
+  $("q-editor").classList.add("hide"); editIdx = null; editingLegacy = null;
+  renderQList();
+};
+["yesno","ranked","multi","text"].forEach(function(t){
+  $("q-add-"+t).onclick = function(){ openEditor(t); };
+});
+$("b-apply-json").onclick = function(){
+  var t = $("b-questions").value.trim();
+  if(!t){ BQ = []; renderQList(); return; }
+  try { BQ = JSON.parse(t); editingLegacy = null; renderQList(); msg("b-msg","okc","JSON applied to the builder."); }
+  catch(e){ msg("b-msg","err","Questions JSON doesn't parse: "+e.message); }
+};
 Array.prototype.forEach.call(document.querySelectorAll("[data-preset]"), function(btn){
   btn.onclick = function(){
-    var qs = [];
-    try { qs = $("b-questions").value.trim() ? JSON.parse($("b-questions").value) : []; }
-    catch(e){ msg("b-msg","err","Fix the JSON before adding a preset: "+e.message); return; }
     var p = JSON.parse(JSON.stringify(PRESETS[btn.dataset.preset]));
-    p.key = p.key.replace("N", String(qs.length+1));
-    qs.push(p);
-    $("b-questions").value = JSON.stringify(qs, null, 2);
-    editingLegacy = null;
+    p.key = p.key.replace("N", String(BQ.length+1));
+    BQ.push(p); editingLegacy = null;
     msg("b-msg","","");
-    syncArt5();
+    renderQList();
   };
 });
 $("b-save").onclick = function(){
@@ -628,19 +823,16 @@ $("b-save").onclick = function(){
     opens_at: $("b-opens").value || null, closes_at: $("b-closes").value || null,
     convention_date: $("b-conv").value || null, apportionment_done: $("b-app").checked
   };
-  var qtxt = $("b-questions").value.trim();
-  if(qtxt){
-    try { body.questions = JSON.parse(qtxt); }
-    catch(e){ msg("b-msg","err","Questions JSON doesn't parse: "+e.message); return; }
-  }
+  if(BQ.length){ body.questions = BQ; }
   var gtxt = $("b-qgroups").value.trim();
   if(gtxt){
     try { body.quota_groups = JSON.parse(gtxt); }
     catch(e){ msg("b-msg","err","Quota groups JSON doesn't parse: "+e.message); return; }
-  } else if(editingLegacy && editingLegacy.q7){
+  }
+  if(!BQ.length && editingLegacy && editingLegacy.q7){
     body.q6 = editingLegacy.q6; body.q8 = editingLegacy.q8; body.q7 = editingLegacy.q7;
-  } else {
-    msg("b-msg","err","Add at least one question (use the preset buttons)."); return;
+  } else if(!BQ.length){
+    msg("b-msg","err","Add at least one question first."); return;
   }
   msg("b-msg","warn","Saving…");
   api("/admin/api/polls/"+$("b-pid").value.trim(), {method:"POST", body:JSON.stringify(body)}).then(function(r){
@@ -1099,15 +1291,10 @@ $("lookup-btn").onclick = function(){
 
 // ---- builder: Art. V fields only for delegate elections ----
 function syncArt5(){
-  var show = false;
-  var txt = $("b-questions").value.trim();
-  if(txt){
-    try { show = (JSON.parse(txt)||[]).some(function(q){ return q && q.delegate; }); }
-    catch(e){ show = true; }   // unparseable: keep fields visible rather than hide
-  } else if(editingLegacy && editingLegacy.q7){ show = true; }  // demo ballot has delegates
+  var show = BQ.some(function(q){ return q && q.delegate; }) ||
+             (!BQ.length && editingLegacy && editingLegacy.q7);
   $("b-art5").style.display = show ? "" : "none";
 }
-$("b-questions").addEventListener("input", syncArt5);
 
 // ---- server-side imports (GCS / BigQuery) ----
 $("import-gcs-btn").onclick = function(){

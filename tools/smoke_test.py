@@ -752,4 +752,22 @@ yq = r.get_json()["questions"][0]
 ok(yq["method_used"].startswith("Meek STV") and len(yq["winners"]) == 2
    and len(yq["stages"]) >= 1, "official Meek count with stage log")
 
+# ---- open-election button ----
+r = c.post("/admin/api/polls/scheduled_test", headers=hdr, json={
+    "name": "Scheduled Test", "opens_at": now + 30 * DAY, "closes_at": now + 40 * DAY,
+    "questions": [{"key": "m1", "type": "yesno", "title": "A measure?"}]})
+ok(r.status_code == 200, "scheduled poll saves")
+ok(c.post("/p/scheduled_test/vote", json={"code": "O" * 16, "answers": {"m1": "YES"}})
+   .status_code == 403, "scheduled poll not open yet")
+sched_admin = "sched-admin-token-01"
+DOCS[("config__admins", hashlib.sha256(sched_admin.encode()).hexdigest())] = {
+    "name": "Sched Chapter", "role": "chapter", "polls": ["scheduled_test"], "active": True}
+ok(c.post("/admin/api/polls/scheduled_test/open",
+          headers={"X-Admin-Token": sched_admin}).status_code == 200,
+   "chapter admin opens own election early")
+ok(c.post("/p/scheduled_test/vote", json={"code": "O" * 16, "answers": {"m1": "YES"}})
+   .status_code == 200, "votes flow immediately after open")
+ok(c.post("/admin/api/polls/special_ref/open", headers=hdr).status_code == 409,
+   "finalized election refuses the open button")
+
 print(f"SMOKE TEST: all {passed} checks passed")
