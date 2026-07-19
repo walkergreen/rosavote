@@ -85,6 +85,7 @@
       <button class="tab on" data-pane="polls-pane">Polls</button>
       <button class="tab" data-pane="builder-pane">Election Builder</button>
       <button class="tab" data-pane="voters-pane">Voters</button>
+      <button class="tab" data-pane="results-pane">Results</button>
       <button class="tab" data-pane="prov-pane">Provisionals</button>
       <button class="tab" data-pane="void-pane">Void &amp; Reissue</button>
     </div>
@@ -114,14 +115,42 @@
         <div id="voters-list" style="margin-top:8px"></div>
         <div id="voters-msg"></div>
         <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+        <p class="kicker">Ballot lookup — troubleshooting (root only, audited)</p>
+        <p>Find a specific ballot by member ID or receipt. Shows the voter's
+        identity-linked answers (admin-visible by policy) and whether their
+        secret-ballot record exists — <b>never</b> the secret ranking. Voters
+        can also self-check at
+        <code>/p/&lt;poll&gt;/verify?receipt=XXXX</code> (public, status only).</p>
+        <div class="row">
+          <div><label>Member ID</label><input type="text" id="lookup-member" placeholder="AK12345"/></div>
+          <div><label>or receipt</label><input type="text" id="lookup-receipt" placeholder="A1B2C3D4"/></div>
+        </div>
+        <button class="btn dark sm" id="lookup-btn" style="margin-top:10px">Look up ballot</button>
+        <div id="lookup-view" style="margin-top:10px"></div>
+        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
         <p class="kicker">Import voter roll (national admins)</p>
-        <p>Upload this chapter's member list as CSV (a <code>member_id</code>
-        column, or member IDs in the first column). One code is minted per new
-        member — the code manifest downloads <b>once</b> and is never stored;
-        deliver it through the send platform. Members already holding a code
-        are skipped.</p>
+        <p><b>Required header:</b> <code>member_id</code>. <b>Optional:</b>
+        <code>chapter</code>. Every other column is ignored, so a full
+        membership export works as-is. One code is minted per new member;
+        already-imported members are skipped. Codes are stored hashed — the
+        plaintext manifest exists exactly once, wherever you receive it.</p>
+
+        <label>A · Browser CSV upload (≤ 20k rows; manifest downloads once)</label>
         <input type="file" id="import-file" accept=".csv,text/csv"/>
         <button class="btn sm" id="import-btn" style="margin-top:10px">Import &amp; download codes</button>
+
+        <label style="margin-top:18px">B · Cloud Storage CSV (big files; manifest written back to the bucket)</label>
+        <input type="text" id="import-gcs-uri" placeholder="gs://dsa-ballot-rolls/nyc_members.csv"/>
+        <button class="btn sm" id="import-gcs-btn" style="margin-top:10px">Import from GCS</button>
+
+        <label style="margin-top:18px">C · BigQuery membership warehouse (eligible members in good standing)</label>
+        <div class="row">
+          <div><label>Roll chapter value</label>
+            <input type="text" id="import-bq-chapter" placeholder="New York City"/></div>
+          <div><label>Manifest destination <small>(required over 20k)</small></label>
+            <input type="text" id="import-bq-manifest" placeholder="gs://bucket/manifest.csv (optional)"/></div>
+        </div>
+        <button class="btn sm" id="import-bq-btn" style="margin-top:10px">Import from BigQuery</button>
         <div id="import-msg"></div>
       </div>
     </div>
@@ -143,8 +172,8 @@
           <div><label>Opens at (poll-local)</label><input type="datetime-local" id="b-opens"/></div>
           <div><label>Closes at (poll-local)</label><input type="datetime-local" id="b-closes"/></div>
         </div>
-        <div class="row">
-          <div><label>Convention date <small>(only for delegate elections)</small></label>
+        <div class="row" id="b-art5" style="display:none">
+          <div><label>Convention date <small>(delegate elections — Art. V window)</small></label>
             <input type="date" id="b-conv"/></div>
           <div><label style="margin-bottom:14px">Apportionment done</label>
             <input type="checkbox" id="b-app" style="width:22px;height:22px"/></div>
@@ -169,6 +198,26 @@
         8-question ballot.</p>
         <button class="btn" id="b-save">Save poll</button>
         <div id="b-msg"></div>
+      </div>
+    </div>
+
+    <div class="card hide" id="results-pane">
+      <div class="card-band">Results</div>
+      <div class="card-body">
+        <p>Results unlock when a poll is <b>finalized</b> (automatic ~15 minutes
+        after close). Ranked contests are counted here by the shipped Scottish
+        STV tabulator — delegate contests include the alternates recount.
+        Free-text answers are counted, never displayed. National sees every
+        poll; chapter tokens see their own.</p>
+        <div id="results-overview"></div>
+        <label>Poll</label>
+        <select id="results-poll"></select>
+        <div class="row">
+          <button class="btn dark sm" id="results-load" style="margin-top:10px">View results</button>
+          <button class="btn ghost sm" id="results-live" style="margin-top:10px">View LIVE tally (root — audited)</button>
+        </div>
+        <div id="results-view" style="margin-top:12px"></div>
+        <div id="results-msg"></div>
       </div>
     </div>
 
@@ -264,7 +313,7 @@ $("login-btn").onclick = function(){
 $("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); location.reload(); };
 
 // ---- tabs ----
-var PANES = ["polls-pane","builder-pane","voters-pane","prov-pane","void-pane"];
+var PANES = ["polls-pane","builder-pane","voters-pane","results-pane","prov-pane","void-pane"];
 Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){
   t.onclick = function(){
     Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(x){ x.classList.remove("on"); });
@@ -300,10 +349,21 @@ function loadPolls(){
       btns.appendChild(edit); btns.appendChild(close); div.appendChild(btns);
       $("polls-list").appendChild(div);
     });
-    ["prov-poll","void-poll","voters-poll"].forEach(function(sel){
+    ["prov-poll","void-poll","voters-poll","results-poll"].forEach(function(sel){
       $(sel).innerHTML = ids.map(function(pid){ return "<option value='"+esc(pid)+"'>"+esc(POLLS[pid].name)+" ("+esc(pid)+")</option>"; }).join("");
     });
+    renderResultsOverview();
   });
+}
+function renderResultsOverview(){
+  var el = $("results-overview"); if(!el) return;
+  var rows = Object.keys(POLLS).map(function(pid){
+    var c = POLLS[pid], fc = c.final_counts;
+    return "<div class='poll'><div><b>"+esc(c.name)+"</b> <span class='chip "+esc(c.state)+"'>"+esc(c.state.replace("_"," "))+"</span>"+
+      (c.finalized ? " <span class='chip open'>finalized — results ready</span>" : " <span class='chip'>results locked</span>")+
+      "<br/><small>"+(fc ? (fc.ballots+" ballots · "+fc.voided+" voided · "+fc.provisional_pending+" provisionals pending") : "—")+"</small></div></div>";
+  }).join("");
+  el.innerHTML = rows;
 }
 $("refresh-btn").onclick = loadPolls;
 $("new-election-btn").onclick = function(){
@@ -311,6 +371,7 @@ $("new-election-btn").onclick = function(){
   ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions"].forEach(function(id){ $(id).value=""; });
   $("b-tz").value = "America/New_York"; $("b-app").checked = false;
   editingLegacy = null; msg("b-msg","","");
+  syncArt5();
   $("b-pid").focus();
 };
 
@@ -327,6 +388,7 @@ function fillBuilder(pid, c){
   $("b-questions").value = c.questions ? JSON.stringify(c.questions, null, 2) : "";
   editingLegacy = c.questions ? null : {q6: c.q6, q8: c.q8, q7: c.q7};
   msg("b-msg","","");
+  syncArt5();
 }
 var PRESETS = {
   referendum: {key:"measure_N", type:"yesno", label:"Ballot measure",
@@ -358,6 +420,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-preset]"), functio
     $("b-questions").value = JSON.stringify(qs, null, 2);
     editingLegacy = null;
     msg("b-msg","","");
+    syncArt5();
   };
 });
 $("b-save").onclick = function(){
@@ -486,6 +549,130 @@ $("import-btn").onclick = function(){
     });
   };
   reader.readAsText(f);
+};
+
+// ---- results ----
+function loadResults(live){
+  var pid = $("results-poll").value;
+  msg("results-msg","warn","Counting…");
+  api("/admin/api/polls/"+pid+"/results"+(live?"?live=1":"")).then(function(r){
+    if(r.status!==200){
+      $("results-view").innerHTML = "";
+      msg("results-msg", r.status===409?"warn":"err",
+          (r.body.message||JSON.stringify(r.body)));
+      return;
+    }
+    msg("results-msg","","");
+    var d = r.body, html = "<p class='kicker'>"+esc(d.name)+" · "+d.ballots_counted+" ballots counted</p>";
+    if(d.live) html = "<div class='msg warn'><b>LIVE TALLY — NOT FINAL.</b> Voting may still be open; "+
+      "numbers change as ballots arrive. This view is audit-logged.</div>" + html;
+    d.questions.forEach(function(q){
+      html += "<div class='provrow'><b>"+esc(q.title)+"</b>"+
+        (q.secret ? " <span class='chip'>secret ballot</span>" : "")+"<div class='fields'>";
+      if(q.type==="yesno"){
+        html += "Yes "+q.counts.YES+" · No "+q.counts.NO+" · Abstain "+q.counts.ABSTAIN+
+          " — <b>"+esc(q.result)+"</b> <small>(abstentions excluded)</small>";
+      } else if(q.type==="ranked"){
+        html += "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
+        if(q.alternates) html += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
+        html += "<br/><small>Scottish STV · "+q.valid_ballots+" valid ballots · quota "+q.quota+
+          " · "+q.stages+" stage(s)</small><br/><small>First preferences: "+
+          esc(Object.keys(q.first_prefs).map(function(n){ return n+" "+q.first_prefs[n]; }).join(" · "))+"</small>";
+      } else if(q.type==="multi"){
+        html += esc(Object.keys(q.counts).map(function(n){ return n+" "+q.counts[n]; }).join(" · ")||"—");
+      } else if(q.type==="text"){
+        html += q.responses+" response(s) — "+esc(q.note);
+      }
+      html += "</div></div>";
+    });
+    $("results-view").innerHTML = html;
+  });
+}
+$("results-load").onclick = function(){ loadResults(false); };
+$("results-live").onclick = function(){ loadResults(true); };
+
+// ---- ballot lookup (root troubleshooting) ----
+$("lookup-btn").onclick = function(){
+  var pid = $("voters-poll").value;
+  var m = $("lookup-member").value.trim(), rc = $("lookup-receipt").value.trim();
+  if(!m && !rc){ msg("voters-msg","err","Enter a member ID or a receipt."); return; }
+  var qs = m ? ("member_id="+encodeURIComponent(m)) : ("receipt="+encodeURIComponent(rc));
+  msg("voters-msg","warn","Looking up…");
+  api("/admin/api/polls/"+pid+"/lookup?"+qs).then(function(r){
+    if(r.status!==200){ msg("voters-msg","err","Lookup failed: "+(r.body.message||JSON.stringify(r.body))); return; }
+    msg("voters-msg","","");
+    var v = $("lookup-view");
+    if(!r.body.found){ v.innerHTML = "<div class='msg warn'>No ballot found. If their code shows used but no "+
+      "ballot exists, that's an integrity incident — check the Voters integrity counter.</div>"; return; }
+    v.innerHTML = r.body.ballots.map(function(b){
+      var rows = Object.keys(b.answers||{}).map(function(k){
+        return "<br/>"+esc(k)+": <b>"+esc(Array.isArray(b.answers[k])?b.answers[k].join(" > "):b.answers[k])+"</b>";
+      }).join("");
+      var cms = Object.keys(b.comments||{}).filter(function(k){ return b.comments[k]; })
+        .map(function(k){ return "<br/>"+esc(k)+" (text): <em>"+esc(b.comments[k])+"</em>"; }).join("");
+      return "<div class='provrow'><b>"+esc(b.receipt)+"</b> · "+esc(b.member_id||"?")+" · "+esc(b.chapter||"")+
+        (b.voided ? " <span class='chip closed'>VOIDED — "+esc(b.void_reason||"")+"</span>" : " <span class='chip open'>counted</span>")+
+        (b.provisional ? " <span class='chip'>provisional</span>" : "")+
+        "<div class='fields'>"+rows+cms+
+        "<br/>Secret ballot recorded: <b>"+(b.secret_ballot_recorded?"✓ yes":"— none")+"</b> <small>(content never shown)</small>"+
+        "<br/><small>record hash "+esc((b.record_hash||"").slice(0,16))+"…</small></div></div>";
+    }).join("");
+  });
+};
+
+// ---- builder: Art. V fields only for delegate elections ----
+function syncArt5(){
+  var show = false;
+  var txt = $("b-questions").value.trim();
+  if(txt){
+    try { show = (JSON.parse(txt)||[]).some(function(q){ return q && q.delegate; }); }
+    catch(e){ show = true; }   // unparseable: keep fields visible rather than hide
+  } else if(editingLegacy && editingLegacy.q7){ show = true; }  // demo ballot has delegates
+  $("b-art5").style.display = show ? "" : "none";
+}
+$("b-questions").addEventListener("input", syncArt5);
+
+// ---- server-side imports (GCS / BigQuery) ----
+$("import-gcs-btn").onclick = function(){
+  var pid = $("voters-poll").value, uri = $("import-gcs-uri").value.trim();
+  if(!/^gs:\/\/.+\/.+/.test(uri)){ msg("import-msg","err","Enter a gs://bucket/file.csv URI."); return; }
+  if(!confirm("Import voters for "+POLLS[pid].name+" from "+uri+"? The code manifest will be written back to that bucket.")) return;
+  msg("import-msg","warn","Importing from Cloud Storage…");
+  api("/admin/api/polls/"+pid+"/voters/import_gcs", {method:"POST", body:JSON.stringify({gcs_uri:uri})}).then(function(r){
+    if(r.status!==200){ msg("import-msg","err","Failed: "+(r.body.message||JSON.stringify(r.body))); return; }
+    msg("import-msg","okc","Imported "+r.body.created_count+" new voter(s); skipped "+r.body.skipped+
+      "; bad rows "+r.body.bad+"."+(r.body.manifest_gcs ? "\nCode manifest: "+r.body.manifest_gcs+" — deliver + then delete it." : ""));
+    loadVoters();
+  });
+};
+$("import-bq-btn").onclick = function(){
+  var pid = $("voters-poll").value;
+  var chapter = $("import-bq-chapter").value.trim() || POLLS[pid].name;
+  var manifest = $("import-bq-manifest").value.trim();
+  if(!confirm("Query the membership warehouse for eligible members of roll chapter \""+chapter+
+    "\" and mint codes into "+POLLS[pid].name+"?")) return;
+  msg("import-msg","warn","Querying BigQuery + importing…");
+  var body = {chapter: chapter}; if(manifest) body.manifest_gcs = manifest;
+  api("/admin/api/polls/"+pid+"/voters/import_bigquery", {method:"POST", body:JSON.stringify(body)}).then(function(r){
+    if(r.status!==200){ msg("import-msg","err","Failed: "+(r.body.message||JSON.stringify(r.body))+(r.body.note?(" — "+r.body.note):"")); return; }
+    if(r.body.manifest_gcs){
+      msg("import-msg","okc","Imported "+r.body.created_count+" voter(s); skipped "+r.body.skipped+
+        ".\nCode manifest: "+r.body.manifest_gcs+" — deliver + then delete it.");
+    } else {
+      var created = r.body.created||[];
+      if(created.length){
+        var csv = "member_id,chapter,code,vote_link\n" + created.map(function(c){
+          return [c.member_id, '"'+String(c.chapter).replace(/"/g,'""')+'"', c.code, c.vote_link].join(",");
+        }).join("\n");
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+        a.download = pid + "_code_manifest.csv"; a.click(); URL.revokeObjectURL(a.href);
+      }
+      msg("import-msg","okc","Imported "+created.length+" voter(s); skipped "+r.body.skipped+
+        (created.length?". Code manifest downloaded — deliver via the send platform; it cannot be re-downloaded.":"."));
+    }
+    loadVoters();
+  });
 };
 
 // ---- provisionals ----

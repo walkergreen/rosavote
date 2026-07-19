@@ -72,9 +72,34 @@ fake_fs.SERVER_TIMESTAMP = "TS"
 fake_fs.transactional = lambda f: f
 fake_exc = types.ModuleType("google.api_core.exceptions")
 fake_exc.Aborted = type("Aborted", (Exception,), {})
-gcloud = types.ModuleType("google.cloud"); gcloud.firestore = fake_fs
+
+# BigQuery stub: returns a tiny fixed roll for any query
+BQ_ROWS = [{"member_akid": 777001}, {"member_akid": 777002}]
+fake_bq = types.ModuleType("google.cloud.bigquery")
+fake_bq.Client = lambda *a, **k: types.SimpleNamespace(
+    query=lambda q, job_config=None: types.SimpleNamespace(result=lambda: list(BQ_ROWS)))
+fake_bq.QueryJobConfig = lambda **k: None
+fake_bq.ScalarQueryParameter = lambda *a, **k: None
+
+# Cloud Storage stub: (bucket, path) -> text
+GCS = {}
+class FakeBlob:
+    def __init__(self, bucket, path):
+        self.bucket, self.path = bucket, path
+    def download_as_text(self):
+        return GCS[(self.bucket, self.path)]
+    def upload_from_string(self, data, content_type=None):
+        GCS[(self.bucket, self.path)] = data
+fake_storage = types.ModuleType("google.cloud.storage")
+fake_storage.Client = lambda *a, **k: types.SimpleNamespace(
+    bucket=lambda name: types.SimpleNamespace(
+        blob=lambda path, _n=name: FakeBlob(_n, path)))
+
+gcloud = types.ModuleType("google.cloud")
+gcloud.firestore = fake_fs; gcloud.bigquery = fake_bq; gcloud.storage = fake_storage
 gapi = types.ModuleType("google.api_core"); gapi.exceptions = fake_exc
 sys.modules.update({"google.cloud": gcloud, "google.cloud.firestore": fake_fs,
+                    "google.cloud.bigquery": fake_bq, "google.cloud.storage": fake_storage,
                     "google.api_core": gapi, "google.api_core.exceptions": fake_exc})
 
 import vote_service  # noqa: E402
@@ -367,5 +392,83 @@ r = c.post("/admin/api/polls/debs_endorsement__chi", headers=hdr,
            json=dict(chi_body, unfinalize=True))
 ok(r.status_code == 200 and "finalized" not in DOCS[("config__polls", "debs_endorsement__chi")],
    "explicit unfinalize reopens (audited)")
+
+# ---- server-side imports: GCS CSV (extra columns ignored) + BigQuery ----
+GCS[("dsa-rolls", "nyc.csv")] = (
+    'member_id,first_name,chapter,unused_col\n'
+    'AK900,"Doe, Jane",New York City,x\n'
+    'AK901,,New York City,y\n')
+r = c.post("/admin/api/polls/special_ref/voters/import_gcs", headers=hdr,
+           json={"gcs_uri": "gs://dsa-rolls/nyc.csv"})
+ok(r.status_code == 200 and r.get_json()["created_count"] == 2,
+   "GCS import: required header honored, extra columns discarded")
+manifest_keys = [k for k in GCS if "code_manifest" in k[1]]
+ok(len(manifest_keys) == 1 and "AK900" in GCS[manifest_keys[0]],
+   "GCS import writes one-time manifest back to bucket")
+ok(c.post("/admin/api/polls/special_ref/voters/import_gcs", headers=chi_hdr,
+          json={"gcs_uri": "gs://dsa-rolls/nyc.csv"}).status_code == 403,
+   "GCS import national-only")
+GCS[("dsa-rolls", "bad.csv")] = "akid,email\n1,a@b.c\n"
+ok(c.post("/admin/api/polls/special_ref/voters/import_gcs", headers=hdr,
+          json={"gcs_uri": "gs://dsa-rolls/bad.csv"}).status_code == 400,
+   "GCS import rejects CSV without member_id header")
+
+r = c.post("/admin/api/polls/special_ref/voters/import_bigquery", headers=hdr,
+           json={"chapter": "New York City"})
+ok(r.status_code == 200 and len(r.get_json()["created"]) == 2
+   and r.get_json()["created"][0]["member_id"] == "AK777001",
+   "BigQuery import mints codes for eligible roll members")
+ok(c.post("/admin/api/polls/special_ref/voters/import_bigquery", headers=chi_hdr,
+          json={"chapter": "Chicago"}).status_code == 403, "BigQuery import national-only")
+
+# ---- results: locked until finalized, then full tallies ----
+ok(c.get("/admin/api/polls/special_ref/results", headers=hdr).status_code == 409,
+   "results locked before finalize")
+r = c.get("/admin/api/polls/special_ref/results?live=1", headers=hdr)
+ok(r.status_code == 200 and r.get_json()["live"] is True, "root live tally works pre-finalize")
+ok(any(d.get("action") == "live_results_view"
+       for (coll, k), d in DOCS.items() if coll == "special_ref__audit_log"),
+   "live tally view is audit-logged")
+ok(c.get("/admin/api/polls/debs_endorsement__chi/results?live=1", headers=chi_hdr).status_code == 409,
+   "chapter tokens get no live tally")
+
+# root ballot lookup: identity-linked answers, secret content never shown
+# (stubbed _claim_code stamps every coded ballot AK-TEST, so look up by the
+# receipt the voters view linked to AK101's code)
+ak101_receipt = vd["AK101"]["receipt"]
+r = c.get(f"/admin/api/polls/special_ref/lookup?receipt={ak101_receipt}", headers=hdr)
+lk = r.get_json()
+ok(r.status_code == 200 and lk["found"] == 1
+   and lk["ballots"][0]["answers"] == {"measure": "NO"}
+   and lk["ballots"][0]["secret_ballot_recorded"] is True
+   and "officer" not in str(lk["ballots"][0]), "lookup: main answers only, secret flagged not shown")
+ok(c.get(f"/admin/api/polls/special_ref/lookup?receipt={ak101_receipt}",
+         headers=chi_hdr).status_code == 403, "lookup is root-only")
+ok(any(d.get("action") == "ballot_lookup"
+       for (coll, k), d in DOCS.items() if coll == "special_ref__audit_log"),
+   "lookup is audit-logged")
+
+# public receipt verification (voter self-check, no auth)
+lr = lk["ballots"][0]["receipt"]
+r = c.get(f"/p/special_ref/verify?receipt={lr}")
+ok(r.status_code == 200 and r.get_json() == {"found": True, "status": "recorded"},
+   "public verify confirms stored receipt")
+ok(c.get("/p/special_ref/verify?receipt=ZZZZZZZZ").status_code == 404,
+   "public verify: unknown receipt not found")
+body = c.get(f"/p/special_ref/verify?receipt={lr}").get_json()
+ok("answers" not in body and "member_id" not in body, "public verify leaks nothing")
+DOCS[("config__polls", "special_ref")]["closes_at"] = now - 50
+r = c.post("/admin/api/cron/closeout", headers=hdr)
+ok("special_ref" in r.get_json()["finalized"], "special_ref finalized by cron")
+r = c.get("/admin/api/polls/special_ref/results", headers=hdr)
+ok(r.status_code == 200, "results unlock after finalize")
+res = {q["key"]: q for q in r.get_json()["questions"]}
+ok(res["measure"]["counts"] == {"YES": 1, "NO": 1, "ABSTAIN": 0}
+   and res["measure"]["result"] == "TIE", "yesno tally + verdict")
+ok(len(res["officer"]["winners"]) == 2 and res["officer"]["secret"],
+   "ranked STV winners from secret ballots")
+ok(res["why"]["responses"] == 1, "text answers counted, not displayed")
+ok(c.get("/admin/api/polls/special_ref/results", headers=chi_hdr).status_code == 403,
+   "results scoped to chapter tokens' own polls")
 
 print(f"SMOKE TEST: all {passed} checks passed")

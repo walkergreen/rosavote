@@ -909,6 +909,8 @@ $("cast-btn").addEventListener("click",function(){
    $("done-title").textContent=isProv?"Provisional Ballot Received":"Vote Recorded";
    var w=$("done-warn");if(w){w.hidden=!isProv;if(isProv)w.innerHTML="<b class='vk-warn-t'>Not counted yet</b>Your ballot is sealed until National Membership verifies your eligibility. You’ll be notified either way.";}
    $("help-link").href="mailto:orgtools@dsausa.org?subject="+encodeURIComponent("[BALLOT26] Voting help — receipt "+d.receipt);
+   var vf=$("done-conf");if(vf&&!isProv)vf.innerHTML="Connection acting up? Confirm this receipt was stored anytime: "+
+    "<a href='"+api("/verify?receipt="+encodeURIComponent(d.receipt))+"' style='color:var(--color-dsa);font-weight:700;'>verify receipt "+esc(d.receipt)+"</a>.";
    show("scr-done");}
   else if(d.status==="already_voted"){setErr($("cast-err"),"This code has already been used to vote. Votes are final.");}
   else if(d.error==="invalid_answers"){setErr($("cast-err"),"Your ballot was missing an answer ("+(d.field||"?")+"). Go back and check each question.");}

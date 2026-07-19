@@ -666,6 +666,33 @@ def voted(poll_id):
     return jsonify({"voted": bool(snap.get("used"))}), 200
 
 
+RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
+
+
+@app.get("/p/<poll_id>/verify")
+def verify_receipt(poll_id):
+    """PUBLIC receipt check — a voter whose browser/VPN made casting feel
+    flaky can confirm their ballot was stored: /p/<poll>/verify?receipt=XXX.
+    Reveals only that a receipt exists and its status, never any answer and
+    never who cast it. (Receipts carry no identity, so enumeration exposes
+    nothing personal.)"""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    receipt = str(request.args.get("receipt", "")).strip().upper()
+    if not RECEIPT_RE.match(receipt):
+        return jsonify({"error": "invalid_receipt_format"}), 400
+    for snap in db.collection(f"{poll_id}__ballots").where("receipt", "==", receipt).stream():
+        d = snap.to_dict() or {}
+        return jsonify({"found": True,
+                        "status": "voided" if d.get("voided") else "recorded"}), 200
+    prov = db.collection(f"{poll_id}__provisional").document(receipt).get()
+    if getattr(prov, "exists", False):
+        st = (prov.to_dict() or {}).get("status", "pending")
+        return jsonify({"found": True, "status": f"provisional_{st}"}), 200
+    return jsonify({"found": False}), 404
+
+
 @app.post("/p/<poll_id>/vote")
 def vote(poll_id):
     cfg = chapter_or_none(poll_id)
@@ -1526,9 +1553,165 @@ def cron_closeout():
     return jsonify({"finalized": finalized}), 200
 
 
+# ---- admin: results (finalized polls only) --------------------------------
+def _blt_text(rows, key, options, seats):
+    """In-memory BLT (same shape make_blt writes) for the STV tabulator."""
+    idx = {o["id"]: i + 1 for i, o in enumerate(options)}
+    lines = [f"{len(options)} {seats}"]
+    for a in rows:
+        ranking = [str(x).upper() for x in (a.get(key) or [])]
+        if not ranking or ranking == ["ABSTAIN"]:
+            lines.append("1 0")
+            continue
+        if not set(ranking) <= set(idx):
+            continue
+        lines.append("1 " + " ".join(str(idx[c]) for c in ranking) + " 0")
+    lines.append("0")
+    for o in options:
+        lines.append('"' + o["name"].replace('"', "'") + '"')
+    lines.append('"contest"')
+    return "\n".join(lines) + "\n"
+
+
+def compute_results(poll_id: str, cfg: dict) -> dict:
+    """Tallies per question. Ranked contests use the shipped Scottish STV
+    tabulator; delegate-style contests also run the alternates recount
+    (two-count method). Text answers are counted, never displayed."""
+    import stv_tabulate
+    main_rows, comments_rows = [], []
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        if d.get("voided"):
+            continue
+        main_rows.append(d.get("answers") or {})
+        comments_rows.append(d.get("comments") or
+                             ({"text": d["comment"]} if d.get("comment") else {}))
+    secret_rows = []
+    for snap in db.collection(f"{poll_id}__delegate_ballots").stream():
+        d = snap.to_dict() or {}
+        if not d.get("voided"):
+            secret_rows.append(d)
+
+    out = []
+    for q in poll_questions(cfg):
+        key, typ = q["key"], q["type"]
+        entry = {"key": key, "type": typ, "title": q["title"],
+                 "secret": bool(q.get("secret"))}
+        rows = secret_rows if q.get("secret") else main_rows
+        if typ == "yesno":
+            counts = {"YES": 0, "NO": 0, "ABSTAIN": 0}
+            for a in main_rows:
+                v = str(a.get(key, "")).upper()
+                if v in counts:
+                    counts[v] += 1
+            contested = counts["YES"] + counts["NO"]
+            entry["counts"] = counts
+            entry["result"] = ("PASSES" if counts["YES"] > counts["NO"] else
+                               "FAILS" if counts["NO"] > counts["YES"] else
+                               "TIE") if contested else "NO CONTEST BALLOTS"
+        elif typ == "ranked":
+            options = q["options"]
+            seats = int(q.get("seats", 1))
+            res = stv_tabulate.count(_blt_text(rows, key, options, seats))
+            entry.update(seats=seats, valid_ballots=res["valid_ballots"],
+                         quota=res["quota"], winners=res["winners"],
+                         first_prefs=res["stages"][0]["totals"],
+                         stages=len(res["stages"]))
+            alts = int(q.get("alternates", 0))
+            if alts:
+                recount = stv_tabulate.count(_blt_text(rows, key, options, seats + alts))
+                entry["alternates"] = [w for w in recount["winners"]
+                                       if w not in res["winners"]]
+        elif typ == "multi":
+            counts = {o["id"]: 0 for o in q["options"]}
+            for a in main_rows:
+                for choice in (a.get(key) or []):
+                    if choice in counts:
+                        counts[choice] += 1
+            entry["counts"] = {o["name"]: counts[o["id"]] for o in q["options"]}
+        elif typ == "text":
+            entry["responses"] = sum(1 for cm in comments_rows if (cm or {}).get(key))
+            entry["note"] = "free-text answers stay sealed (admin export only)"
+        out.append(entry)
+    return {"poll_id": poll_id, "name": cfg.get("name"),
+            "finalized_at": cfg.get("finalized_at"),
+            "final_counts": cfg.get("final_counts"),
+            "ballots_counted": len(main_rows), "questions": out}
+
+
+@app.get("/admin/api/polls/<poll_id>/results")
+def admin_poll_results(poll_id):
+    """Results unlock after finalize. Exception (decided policy: live tallies
+    are admin-only + audited): NATIONAL admins may pass ?live=1 to see a live
+    tally mid-election for troubleshooting — every live view is audit-logged.
+    Chapter tokens always wait for finalize."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    live = bool(request.args.get("live"))
+    if not cfg.get("finalized"):
+        if not (live and ident["role"] == "national"):
+            return jsonify({"error": "not_finalized",
+                            "message": "Results unlock when the poll is finalized "
+                                       "(automatic ~15 min after close). National "
+                                       "admins can view a live tally with ?live=1 "
+                                       "(audited)."}), 409
+        _audit(poll_id, "live_results_view", ident["name"])
+    out = compute_results(poll_id, cfg)
+    out["live"] = not cfg.get("finalized")
+    return jsonify(out), 200
+
+
+@app.get("/admin/api/polls/<poll_id>/lookup")
+def admin_ballot_lookup(poll_id):
+    """Root-only troubleshooting lookup by member_id or receipt: shows the
+    voter's identity-linked answers (admin-visible by decided policy) and
+    whether their secret-ballot record exists — NEVER the secret ranking
+    itself. Every lookup is audit-logged."""
+    ident = require_admin(poll_id, national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    if not chapter_or_none(poll_id):
+        return jsonify({"error": "unknown_poll"}), 404
+    member_id = str(request.args.get("member_id", "")).strip()
+    receipt = str(request.args.get("receipt", "")).strip().upper()
+    if not member_id and not receipt:
+        return jsonify({"error": "bad_request",
+                        "message": "pass member_id or receipt"}), 400
+    matches = []
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        if (member_id and str(d.get("member_id", "")) == member_id) or \
+           (receipt and d.get("receipt") == receipt):
+            matches.append(d)
+    secret_receipts = set()
+    if matches:
+        wanted = {d.get("receipt") for d in matches}
+        for snap in db.collection(f"{poll_id}__delegate_ballots").stream():
+            r = (snap.to_dict() or {}).get("receipt")
+            if r in wanted:
+                secret_receipts.add(r)
+    _audit(poll_id, "ballot_lookup", ident["name"],
+           member_id=member_id or None, receipt=receipt or None,
+           found=len(matches))
+    return jsonify({"found": len(matches), "ballots": [{
+        "receipt": d.get("receipt"), "member_id": d.get("member_id"),
+        "chapter": d.get("chapter"),
+        "answers": d.get("answers"), "comments": d.get("comments") or {},
+        "voided": bool(d.get("voided")), "void_reason": d.get("void_reason"),
+        "provisional": bool(d.get("provisional")),
+        "record_hash": d.get("record_hash"),
+        "secret_ballot_recorded": d.get("receipt") in secret_receipts,
+    } for d in matches]}), 200
+
+
 # ---- admin: voters (turnout status — never how anyone voted) --------------
 VOTERS_LIST_CAP = 1000
 IMPORT_CAP = 20000
+SERVER_IMPORT_CAP = 200000
 
 
 @app.get("/admin/api/polls/<poll_id>/voters")
@@ -1605,6 +1788,13 @@ def admin_import_voters(poll_id):
         return jsonify({"error": "too_many",
                         "message": f"cap is {IMPORT_CAP} members per import"}), 400
 
+    created, skipped, bad = _import_members(poll_id, cfg, members, ident, "console_csv")
+    return jsonify({"created": created, "skipped": skipped, "bad": bad}), 200
+
+
+def _import_members(poll_id, cfg, members, ident, source):
+    """Mint one hashed code doc per NEW member. Returns (created_manifest,
+    skipped, bad); plaintext codes exist only in the returned manifest."""
     codes = db.collection(f"{poll_id}__codes")
     existing = set()
     for snap in codes.stream():
@@ -1629,8 +1819,147 @@ def admin_import_voters(poll_id):
             "used": False, "member_id": mid, "chapter": chapter})
         created.append({"member_id": mid, "chapter": chapter, "code": code,
                         "vote_link": f"{base}/p/{poll_id}/v/{code}"})
-    _audit(poll_id, "voters_import", ident["name"],
+    _audit(poll_id, "voters_import", ident["name"], source=source,
            created=len(created), skipped=skipped, bad=bad)
+    return created, skipped, bad
+
+
+def _manifest_csv(created) -> str:
+    lines = ["member_id,chapter,code,vote_link"]
+    for c in created:
+        lines.append(",".join([c["member_id"],
+                               '"' + str(c["chapter"]).replace('"', '""') + '"',
+                               c["code"], c["vote_link"]]))
+    return "\n".join(lines) + "\n"
+
+
+def _parse_gcs_uri(uri):
+    m = re.match(r"^gs://([^/]+)/(.+)$", str(uri or "").strip())
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def _write_manifest_gcs(bucket_name, path, created):
+    from google.cloud import storage
+    blob = storage.Client().bucket(bucket_name).blob(path)
+    blob.upload_from_string(_manifest_csv(created), content_type="text/csv")
+    return f"gs://{bucket_name}/{path}"
+
+
+@app.post("/admin/api/polls/<poll_id>/voters/import_gcs")
+def admin_import_voters_gcs(poll_id):
+    """Import a roll from a CSV in Cloud Storage (national admins only).
+    Required header: member_id. Optional: chapter. Every other column is
+    ignored. The code manifest is written BACK to the same bucket
+    (<name>_code_manifest_<rand>.csv) — plaintext codes never transit the
+    console; lock the bucket down accordingly."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    bucket, path = _parse_gcs_uri((request.get_json(silent=True) or {}).get("gcs_uri"))
+    if not bucket:
+        return jsonify({"error": "bad_request", "message": "gcs_uri must be gs://bucket/file.csv"}), 400
+    import csv as _csv
+    import io
+    try:
+        from google.cloud import storage
+        text = storage.Client().bucket(bucket).blob(path).download_as_text()
+    except Exception as e:
+        return jsonify({"error": "gcs_read_failed", "message": type(e).__name__}), 502
+    reader = _csv.DictReader(io.StringIO(text))
+    headers = {h.strip().lower(): h for h in (reader.fieldnames or [])}
+    if "member_id" not in headers:
+        return jsonify({"error": "bad_csv",
+                        "message": "required header member_id missing "
+                                   f"(found: {sorted(headers)})"}), 400
+    members = []
+    for row in reader:
+        members.append({"member_id": (row.get(headers["member_id"]) or "").strip(),
+                        "chapter": (row.get(headers.get("chapter", ""), "") or "").strip()})
+        if len(members) > SERVER_IMPORT_CAP:
+            return jsonify({"error": "too_many",
+                            "message": f"cap is {SERVER_IMPORT_CAP} rows"}), 400
+    created, skipped, bad = _import_members(poll_id, cfg, members, ident, "gcs_csv")
+    manifest_uri = None
+    if created:
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        dest = f"{stem}_code_manifest_{secrets.token_hex(4)}.csv"
+        try:
+            manifest_uri = _write_manifest_gcs(bucket, dest, created)
+        except Exception as e:
+            return jsonify({"error": "manifest_write_failed", "message": type(e).__name__,
+                            "note": "codes were minted; re-void or contact tech"}), 502
+    return jsonify({"created_count": len(created), "skipped": skipped, "bad": bad,
+                    "manifest_gcs": manifest_uri}), 200
+
+
+ROLL_IMPORT_QUERY = """
+WITH eligible AS (
+  SELECT actionkit_id, dedup_group_id
+  FROM `{roll}.ak_primary_id`
+  WHERE is_primary AND membership_status = 'Member in Good Standing'
+)
+SELECT e.actionkit_id AS member_akid
+FROM eligible e
+JOIN `{roll}.ak_user_fields_pivoted` f ON f.user_id = e.actionkit_id
+WHERE f.chapter = @chapter
+"""
+
+
+@app.post("/admin/api/polls/<poll_id>/voters/import_bigquery")
+def admin_import_voters_bigquery(poll_id):
+    """Import straight from the membership warehouse (national admins only):
+    eligible primaries (Member in Good Standing) whose roll chapter matches.
+    Manifest: inline for small rolls, or written to manifest_gcs
+    (gs://bucket/file.csv) — required above the inline cap."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    data = request.get_json(silent=True) or {}
+    chapter = str(data.get("chapter") or cfg.get("roll_chapter") or cfg.get("name") or "").strip()
+    if not chapter:
+        return jsonify({"error": "bad_request", "message": "chapter required"}), 400
+    project = str(data.get("roll_project") or "proj-tmc-mem-dsa")
+    dataset = str(data.get("roll_dataset") or "main")
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project=project)
+        job = client.query(
+            ROLL_IMPORT_QUERY.format(roll=f"{project}.{dataset}"),
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("chapter", "STRING", chapter)]))
+        members = [{"member_id": f"AK{row['member_akid']}", "chapter": chapter}
+                   for row in job.result()]
+    except Exception as e:
+        return jsonify({"error": "bigquery_failed", "message": type(e).__name__,
+                        "note": "the service account needs BigQuery read on the "
+                                "roll project"}), 502
+    if not members:
+        return jsonify({"error": "empty_roll",
+                        "message": f"no eligible members with roll chapter {chapter!r}"}), 404
+    if len(members) > SERVER_IMPORT_CAP:
+        return jsonify({"error": "too_many", "message": f"cap is {SERVER_IMPORT_CAP}"}), 400
+    mb, mp = _parse_gcs_uri(data.get("manifest_gcs"))
+    if len(members) > IMPORT_CAP and not mb:
+        # refuse BEFORE minting — a big manifest with nowhere to land would
+        # strand plaintext codes
+        return jsonify({"error": "manifest_gcs_required",
+                        "message": "pass manifest_gcs (gs://bucket/file.csv) for rolls "
+                                   f"over {IMPORT_CAP}"}), 400
+    created, skipped, bad = _import_members(poll_id, cfg, members, ident, "bigquery")
+    if mb:
+        try:
+            uri = _write_manifest_gcs(mb, mp, created)
+        except Exception as e:
+            return jsonify({"error": "manifest_write_failed", "message": type(e).__name__,
+                            "note": "codes were minted; re-void or contact tech"}), 502
+        return jsonify({"created_count": len(created), "skipped": skipped,
+                        "bad": bad, "manifest_gcs": uri}), 200
     return jsonify({"created": created, "skipped": skipped, "bad": bad}), 200
 
 

@@ -47,10 +47,23 @@ gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
   is only the fallback seed until `tools/seed_config.py polls` has run.
 - `admin_console.html` — single-file branded console served at `/admin/`
   (token sign-in, polls list + create-election, builder w/ questions JSON +
-  presets, VOTERS tab: per-voter turnout + received-verification + integrity
-  counter + row void + national-only CSV roll import minting hashed codes
-  with a one-time manifest download, adjudication, void). Static shell;
-  every API it calls is token-gated. Voters view never exposes answers.
+  presets — Art. V convention/apportionment fields appear only when a
+  delegate question exists, VOTERS tab: per-voter turnout +
+  received-verification + integrity counter + row void + national-only roll
+  imports (browser CSV ≤20k · GCS CSV — required header `member_id`,
+  optional `chapter`, extras ignored, manifest written back to the bucket ·
+  BigQuery eligible-roll by chapter), RESULTS tab: overview of all polls +
+  full tallies on FINALIZED polls only (in-service Scottish STV via the
+  bundled `stv_tabulate.py`, two-count alternates, text counted-not-shown),
+  adjudication, void). Root extras: LIVE tally on open polls
+  (`?live=1`, national-only, every view audit-logged) and ballot lookup by
+  member_id/receipt (identity-linked answers per policy; secret questions
+  show recorded-yes/no only, never content; audit-logged). Voters can
+  self-check publicly: `GET /p/<pid>/verify?receipt=X` -> found/status only
+  (linked from the ballot's done screen). Static shell; every API it calls
+  is token-gated. Voters view never exposes answers.
+- `stv_tabulate.py` — copy of the parent folder's tabulator, bundled so
+  `/admin/api/polls/<pid>/results` can count in-service. Keep in sync.
 - `ballot_template.html` — single-file branded ballot (all CSS/JS inline).
   Server injects: `__POLL_ID__ __CHAPTER_NAME__ __CODE__ __Q6_QUESTION__
   __Q8_QUESTION__ __Q7_OPTIONS__ __Q7_NOTE__ __Q7_SEATS__ __Q7_ALTS__
