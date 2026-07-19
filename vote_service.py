@@ -1094,6 +1094,40 @@ def admin_close_poll(poll_id):
     return jsonify({"ok": True, "closes_at": cfg["closes_at"]}), 200
 
 
+@app.post("/admin/api/cron/closeout")
+def cron_closeout():
+    """Close-out automation (Cloud Scheduler hits this every 15 min with a
+    national token): finalize every poll whose window has closed. Finalizing
+    snapshots the final counts into the config doc and the audit log —
+    idempotent, so repeated runs are no-ops. The heavy export (hash chain,
+    BLTs, results packages) still runs from tools/ against the frozen data."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    now = int(time.time())
+    finalized = {}
+    for pid, cfg in load_polls(force=True).items():
+        if not cfg.get("closes_at") or now <= cfg["closes_at"] or cfg.get("finalized"):
+            continue
+        n_ballots = n_voided = 0
+        for snap in db.collection(f"{pid}__ballots").stream():
+            if (snap.to_dict() or {}).get("voided"):
+                n_voided += 1
+            else:
+                n_ballots += 1
+        n_pending = sum(1 for _ in db.collection(f"{pid}__provisional")
+                        .where("status", "==", "pending").stream())
+        counts = {"ballots": n_ballots, "voided": n_voided,
+                  "provisional_pending": n_pending}
+        db.collection(CONFIG_COLL).document(pid).set(cfg_to_doc(dict(
+            cfg, finalized=True, finalized_at=now, final_counts=counts)))
+        _audit(pid, "closeout_finalize", ident["name"], counts=counts)
+        finalized[pid] = counts
+    if finalized:
+        load_polls(force=True)
+    return jsonify({"finalized": finalized}), 200
+
+
 # ---- admin: provisional adjudication queue --------------------------------
 @app.get("/admin/api/polls/<poll_id>/provisionals")
 def admin_list_provisionals(poll_id):

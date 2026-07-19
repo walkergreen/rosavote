@@ -263,4 +263,16 @@ ok(c.post("/p/debs_endorsement__chi/vote",
           json={"code": "TEST-CHI-2026-DEMO", "answers": GOOD}).status_code == 403,
    "closed poll rejects votes")
 
+# close-out cron: finalizes closed polls once, idempotently, national-only
+DOCS[("config__polls", "debs_endorsement__chi")]["closes_at"] = now - 60
+ok(c.post("/admin/api/cron/closeout", headers=chi_hdr).status_code == 403,
+   "closeout cron national-only")
+r = c.post("/admin/api/cron/closeout", headers=hdr)
+ok(r.status_code == 200 and "debs_endorsement__chi" in r.get_json()["finalized"],
+   "closeout finalizes closed poll")
+cfg_doc = DOCS[("config__polls", "debs_endorsement__chi")]
+ok(cfg_doc.get("finalized") and "final_counts" in cfg_doc, "final counts snapshotted")
+r = c.post("/admin/api/cron/closeout", headers=hdr)
+ok(r.get_json()["finalized"] == {}, "closeout idempotent")
+
 print(f"SMOKE TEST: all {passed} checks passed")
