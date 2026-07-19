@@ -358,11 +358,20 @@ function boot(){
 $("login-btn").onclick = function(){
   TOKEN = $("tok").value.trim();
   if(!TOKEN) return;
+  if(/^TEST-/i.test(TOKEN)){
+    msg("login-msg","err","That's a chapter TEST voting code — it works on the ballot pages "+
+      "(for casting practice votes), not here. The console needs an ADMIN token: national "+
+      "staff retrieve the root token from Secret Manager (ballot-admin-token); chapter "+
+      "admins get a scoped token from national. See “How to get access” on the home page.");
+    return;
+  }
   sessionStorage.setItem("admin_token", TOKEN);
   msg("login-msg","warn","Checking…");
   api("/admin/api/whoami").then(function(r){
     if(r.status===200){ msg("login-msg","",""); boot(); }
-    else msg("login-msg","err","Token not recognized (or admin surface disabled).");
+    else msg("login-msg","err","Token not recognized (or admin surface disabled). Note: voting "+
+      "codes and TEST codes don't open the console — it needs an admin token (see "+
+      "“How to get access” on the home page).");
   });
 };
 $("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); location.reload(); };

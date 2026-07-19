@@ -829,7 +829,9 @@ SPLASH = """<!doctype html><html lang="en"><head>
         <summary>How to get access</summary>
         <div class="dbody">
         <p>The console needs an <b>admin token</b> (entered on its sign-in
-        screen; nothing here works without one). <b>National (root) token:</b>
+        screen; nothing here works without one). <b>The chapter TEST codes at
+        the top of this page are voting codes, not admin tokens</b> &mdash;
+        they open ballots, never the console. <b>National (root) token:</b>
         held in Secret Manager as <code>ballot-admin-token</code> in the
         <code>dsa-org-tools</code> project &mdash; staff with project access
         retrieve it via
