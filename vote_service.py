@@ -17,6 +17,7 @@ Shared ballot definition lives in ONE place (BALLOT), so every chapter votes
 on identical wording. Per-chapter config (name, window) lives in CHAPTERS.
 """
 
+import calendar
 import hashlib
 import json
 import os
@@ -24,6 +25,7 @@ import random
 import re
 import secrets
 import time
+from datetime import date, timedelta
 
 from flask import Flask, request, jsonify, Response
 from google.cloud import firestore
@@ -95,8 +97,9 @@ def canon_answers(a: dict) -> str:
     """Deterministic serialization — MUST match tools/verify.py + build_chain.py."""
     return json.dumps(a, separators=(",", ":"), sort_keys=True)
 
-# ---- chapter registry -----------------------------------------------------
-# In production, load this from Firestore/BigQuery. poll_id -> chapter config.
+# ---- chapter registry (FALLBACK SEED) -------------------------------------
+# Served only until config__polls is seeded in Firestore (tools/seed_config.py);
+# after that, load_polls() below is the source of truth. poll_id -> config.
 # opens_at / closes_at are unix seconds; None means "no window enforced".
 CHAPTERS = {
     # Per chapter: display name, window, a REPEATABLE test code (never recorded),
@@ -175,15 +178,75 @@ def make_record_hash(receipt: str, answers_canon: str, nonce: str) -> str:
     return hashlib.sha256(f"{receipt}|{answers_canon}|{nonce}".encode()).hexdigest()
 
 
+# ---- poll config: Firestore-backed, CHAPTERS is the fallback seed ----------
+# config__polls holds one doc per poll_id. Because Firestore forbids nested
+# arrays, q7.candidates is stored as [{"id": ..., "name": ...}]; the loader
+# normalizes back to the (id, name) tuples the rest of the code expects.
+# tools/seed_config.py pushes the CHAPTERS seed into the collection.
+CONFIG_COLL = "config__polls"
+CFG_TTL_SECONDS = 60.0
+_cfg_cache = {"at": 0.0, "polls": None}
+
+
+def _normalize_cfg(d: dict) -> dict:
+    cfg = dict(d)
+    cfg.setdefault("opens_at", None)
+    cfg.setdefault("closes_at", None)
+    q7 = dict(cfg.get("q7") or {})
+    q7["candidates"] = [
+        (c["id"], c["name"]) if isinstance(c, dict) else (c[0], c[1])
+        for c in (q7.get("candidates") or [])
+    ]
+    q7.setdefault("alternates", 0)
+    q7.setdefault("real_delegates", 0)
+    q7.setdefault("real_alternates", 0)
+    cfg["q7"] = q7
+    return cfg
+
+
+def cfg_to_doc(cfg: dict) -> dict:
+    """Inverse of _normalize_cfg: make a config Firestore-storable."""
+    doc = dict(cfg)
+    q7 = dict(doc.get("q7") or {})
+    q7["candidates"] = [
+        c if isinstance(c, dict) else {"id": c[0], "name": c[1]}
+        for c in (q7.get("candidates") or [])
+    ]
+    doc["q7"] = q7
+    return doc
+
+
+def load_polls(force: bool = False) -> dict:
+    """All active poll configs, from Firestore when seeded, else the CHAPTERS
+    seed. Cached per instance for CFG_TTL_SECONDS; admin edits force-reload
+    their own instance and other instances converge within the TTL."""
+    now = time.time()
+    if not force and _cfg_cache["polls"] is not None and now - _cfg_cache["at"] < CFG_TTL_SECONDS:
+        return _cfg_cache["polls"]
+    try:
+        polls = {}
+        for snap in db.collection(CONFIG_COLL).stream():
+            d = snap.to_dict() or {}
+            if d.get("archived"):
+                continue
+            polls[snap.id] = _normalize_cfg(d)
+        if not polls:
+            polls = CHAPTERS
+    except Exception:
+        polls = CHAPTERS  # Firestore unreachable/unseeded — serve the built-in seed
+    _cfg_cache.update(at=now, polls=polls)
+    return polls
+
+
 def chapter_or_none(poll_id: str):
-    return CHAPTERS.get(poll_id)
+    return load_polls().get(poll_id)
 
 
 def window_state(cfg):
     now = time.time()
-    if cfg["opens_at"] and now < cfg["opens_at"]:
+    if cfg.get("opens_at") and now < cfg["opens_at"]:
         return "not_open"
-    if cfg["closes_at"] and now > cfg["closes_at"]:
+    if cfg.get("closes_at") and now > cfg["closes_at"]:
         return "closed"
     return "open"
 
@@ -771,27 +834,347 @@ SPLASH = """<!doctype html><html lang="en"><head>
 @app.get("/")
 def index():
     """Branded splash: per-chapter repeatable test codes + chapter ballot links."""
-    links = "".join(f'<li><a href="/p/{pid}/">{cfg["name"]}</a></li>' for pid, cfg in CHAPTERS.items())
+    polls = load_polls()
+    links = "".join(f'<li><a href="/p/{pid}/">{cfg["name"]}</a></li>' for pid, cfg in polls.items())
     rows = "".join(
         f'<p style="margin:0 0 4px"><b>{cfg["name"]}</b><br/>'
         f'<code class="tc" style="font-size:.86rem">{cfg["test_code"]}</code></p>'
         f'<a class="btn" style="min-height:40px;font-size:1.05rem;margin:6px 0 14px" '
         f'href="/p/{pid}/v/{cfg["test_code"]}">Open {cfg["name"]} ballot with test code &rarr;</a>'
-        for pid, cfg in CHAPTERS.items()
+        for pid, cfg in polls.items() if cfg.get("test_code")
     )
     html = SPLASH.replace("__TEST_ROWS__", rows).replace("__CHAPTER_LINKS__", links)
     return Response(html, mimetype="text/html")
 
 
-# ---- admin: void-and-reissue (never edit) --------------------------------
-# Gated by the ADMIN_TOKEN env var (X-Admin-Token header). If ADMIN_TOKEN is
-# unset the endpoint is disabled — safe default for public staging. Production
-# should sit behind IAM/IAP as well.
+# ---- admin auth: scoped tokens -------------------------------------------
+# Two tiers, both via the X-Admin-Token header:
+#   * ADMIN_TOKEN env var — national break-glass root token. If unset AND no
+#     tokens exist in config__admins, all admin surface stays disabled (safe
+#     default for public staging). Production should sit behind IAM/IAP too.
+#   * config__admins — Firestore docs keyed by SHA-256(token):
+#     {name, role: "national"|"chapter", polls: [poll_id...], active}.
+#     Minted by tools/seed_config.py admin; plaintext is never stored.
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+ADMINS_COLL = "config__admins"
 
 VOID_REASONS = {"stolen_code", "technical_failure", "provisional_adjudication"}
 
 
+def _admin_identity(token: str):
+    if not token or len(token) > 128:
+        return None
+    if ADMIN_TOKEN and secrets.compare_digest(token, ADMIN_TOKEN):
+        return {"name": "root", "role": "national", "polls": []}
+    try:
+        snap = db.collection(ADMINS_COLL).document(code_hash(token)).get()
+    except Exception:
+        return None
+    if not getattr(snap, "exists", False):
+        return None
+    d = snap.to_dict() or {}
+    if not d.get("active", True):
+        return None
+    return {"name": d.get("name", "?"), "role": d.get("role", "chapter"),
+            "polls": list(d.get("polls") or [])}
+
+
+def require_admin(poll_id: str = None, national_only: bool = False):
+    """Resolve the caller's admin identity, or None if unauthorized.
+    Chapter-scoped tokens only reach polls in their own list."""
+    ident = _admin_identity(request.headers.get("X-Admin-Token", ""))
+    if not ident:
+        return None
+    if ident["role"] == "national":
+        return ident
+    if national_only:
+        return None
+    if poll_id is not None and poll_id not in ident["polls"]:
+        return None
+    return ident
+
+
+def _audit(poll_id: str, action: str, admin: str, **fields):
+    db.collection(f"{poll_id}__audit_log").document(secrets.token_hex(16)).set(
+        {"action": action, "admin": admin, "at": firestore.SERVER_TIMESTAMP, **fields})
+
+
+# ---- admin: election builder (config CRUD w/ Art. V validation) -----------
+POLL_ID_RE = re.compile(r"^[a-z0-9_]{3,64}$")
+CAND_ID_RE = re.compile(r"^[A-Z0-9_]{2,32}$")
+ART5_MIN_DAYS = 45          # Const. Art. V §5: ≥45 days before convention...
+ART5_MAX_MONTHS = 4         # ...and ≤4 months before it, post-apportionment.
+
+
+def _months_before(d: date, months: int) -> date:
+    y, m = d.year, d.month - months
+    while m <= 0:
+        m += 12
+        y -= 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def validate_poll_config(poll_id: str, body: dict):
+    """Election-builder validation. Returns (normalized_cfg, errors, warnings).
+    Art. V §5 is enforced structurally: when a convention date is given, the
+    whole voting window must sit inside [convention − 4 months,
+    convention − 45 days] and apportionment must be confirmed done."""
+    errors, warnings = [], []
+    if not POLL_ID_RE.match(poll_id or ""):
+        errors.append("poll_id must match [a-z0-9_]{3,64}")
+
+    name = str(body.get("name") or "").strip()
+    if not name:
+        errors.append("name is required")
+    q6 = str(body.get("q6") or "").strip()
+    q8 = str(body.get("q8") or "").strip()
+    if not q6 or not q8:
+        errors.append("both local-issue questions (q6, q8) are required")
+    test_code = str(body.get("test_code") or "").strip()
+    if test_code and not CODE_RE.match(test_code):
+        errors.append("test_code must match [A-Za-z0-9_-]{12,64}")
+
+    def ts(key):
+        v = body.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            errors.append(f"{key} must be unix seconds")
+            return None
+    opens_at, closes_at = ts("opens_at"), ts("closes_at")
+    if opens_at and closes_at and opens_at >= closes_at:
+        errors.append("opens_at must be before closes_at")
+
+    q7in = body.get("q7") or {}
+    def n(key, minimum):
+        try:
+            v = int(q7in.get(key, 0))
+        except (TypeError, ValueError):
+            v = -1
+        if v < minimum:
+            errors.append(f"q7.{key} must be an integer ≥ {minimum}")
+        return max(v, 0)
+    seats = n("seats", 1)
+    alternates = n("alternates", 0)
+    real_delegates = n("real_delegates", 0)
+    real_alternates = n("real_alternates", 0)
+
+    cands, seen = [], set()
+    for c in (q7in.get("candidates") or []):
+        cid = str((c.get("id") if isinstance(c, dict) else c[0]) or "").strip().upper()
+        cname = str((c.get("name") if isinstance(c, dict) else c[1]) or "").strip()
+        if not CAND_ID_RE.match(cid) or cid == "ABSTAIN":
+            errors.append(f"bad candidate id {cid!r} ([A-Z0-9_]{{2,32}}, ABSTAIN reserved)")
+        elif cid in seen:
+            errors.append(f"duplicate candidate id {cid!r}")
+        elif not cname:
+            errors.append(f"candidate {cid!r} needs a display name")
+        else:
+            seen.add(cid)
+            cands.append((cid, cname))
+    if not cands:
+        errors.append("q7 needs at least one candidate")
+    elif len(cands) <= seats + alternates:
+        warnings.append(f"uncontested: {len(cands)} candidate(s) for "
+                        f"{seats} seat(s) + {alternates} alternate(s)")
+
+    conv_raw = str(body.get("convention_date") or "").strip()
+    apportioned = bool(body.get("apportionment_done"))
+    if conv_raw:
+        try:
+            conv = date.fromisoformat(conv_raw)
+        except ValueError:
+            conv = None
+            errors.append("convention_date must be YYYY-MM-DD")
+        if conv:
+            if not apportioned:
+                errors.append("Art. V: delegates must be apportioned before the election")
+            if not (opens_at and closes_at):
+                errors.append("Art. V: a delegate election needs an explicit voting window")
+            else:
+                earliest = _months_before(conv, ART5_MAX_MONTHS)
+                latest = conv - timedelta(days=ART5_MIN_DAYS)
+                w_open = date.fromtimestamp(opens_at)
+                w_close = date.fromtimestamp(closes_at)
+                if w_open < earliest:
+                    errors.append(f"Art. V: opens {w_open}, but no earlier than "
+                                  f"{earliest} (4 months before convention)")
+                if w_close > latest:
+                    errors.append(f"Art. V: closes {w_close}, but no later than "
+                                  f"{latest} (45 days before convention)")
+    else:
+        warnings.append("no convention_date — Art. V delegate-window validation skipped")
+
+    cfg = {
+        "name": name, "opens_at": opens_at, "closes_at": closes_at,
+        "test_code": test_code or None, "q6": q6, "q8": q8,
+        "convention_date": conv_raw or None, "apportionment_done": apportioned,
+        "q7": {"seats": seats, "alternates": alternates,
+               "real_delegates": real_delegates, "real_alternates": real_alternates,
+               "candidates": cands},
+    }
+    return cfg, errors, warnings
+
+
+ADMIN_CONSOLE = open(os.path.join(os.path.dirname(__file__), "admin_console.html")).read()
+
+
+@app.get("/admin/")
+def admin_console_page():
+    """Static console shell — every API it calls is token-gated."""
+    return Response(ADMIN_CONSOLE, mimetype="text/html")
+
+
+@app.get("/admin/api/whoami")
+def admin_whoami():
+    ident = require_admin()
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify(ident), 200
+
+
+@app.get("/admin/api/polls")
+def admin_list_polls():
+    ident = require_admin()
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    polls = load_polls(force=True)
+    if ident["role"] != "national":
+        polls = {pid: cfg for pid, cfg in polls.items() if pid in ident["polls"]}
+    return jsonify({pid: dict(cfg_to_doc(cfg), state=window_state(cfg))
+                    for pid, cfg in polls.items()}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>")
+def admin_save_poll(poll_id):
+    """Create or update a poll config (national admins only)."""
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg, errors, warnings = validate_poll_config(poll_id, request.get_json(silent=True) or {})
+    if errors:
+        return jsonify({"error": "invalid_config", "errors": errors,
+                        "warnings": warnings}), 400
+    db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
+    _audit(poll_id, "config_save", ident["name"])
+    load_polls(force=True)
+    return jsonify({"ok": True, "warnings": warnings}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/close")
+def admin_close_poll(poll_id):
+    """Close-out button: closes the window now (upserts the config doc, so it
+    also works while still running off the CHAPTERS seed)."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    cfg = dict(cfg, closes_at=int(time.time()))
+    db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
+    _audit(poll_id, "close_poll", ident["name"])
+    load_polls(force=True)
+    return jsonify({"ok": True, "closes_at": cfg["closes_at"]}), 200
+
+
+# ---- admin: provisional adjudication queue --------------------------------
+@app.get("/admin/api/polls/<poll_id>/provisionals")
+def admin_list_provisionals(poll_id):
+    """Pending provisionals — identity fields only. The ballot answers stay
+    sealed; adjudicators match the person, not the vote."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    if not chapter_or_none(poll_id):
+        return jsonify({"error": "unknown_poll"}), 404
+    out = []
+    for snap in db.collection(f"{poll_id}__provisional").where("status", "==", "pending").stream():
+        d = snap.to_dict() or {}
+        out.append({k: d.get(k, "") for k in
+                    ("receipt", "first", "last", "emails", "phones",
+                     "chapter", "join_date", "alt_names")})
+    return jsonify({"pending": out}), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/provisionals/<receipt>")
+def admin_adjudicate_provisional(poll_id, receipt):
+    """Adjudicate a sealed provisional: verify (promote into the real ballot
+    collections + burn the member's unused codes) or reject. Allowed after
+    close — adjudication routinely happens between close and certification,
+    before the hash chain is built."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    if not chapter_or_none(poll_id):
+        return jsonify({"error": "unknown_poll"}), 404
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+    if action not in ("verify", "reject"):
+        return jsonify({"error": "bad_request", "message": "action must be verify|reject"}), 400
+
+    ref = db.collection(f"{poll_id}__provisional").document(receipt)
+    snap = ref.get()
+    if not getattr(snap, "exists", False):
+        return jsonify({"error": "receipt_not_found"}), 404
+    prov = snap.to_dict() or {}
+    if prov.get("status") != "pending":
+        return jsonify({"error": "already_adjudicated", "status": prov.get("status")}), 409
+
+    if action == "reject":
+        ref.update({"status": "rejected", "note": str(data.get("note", "")),
+                    "adjudicated_by": ident["name"], "adjudicated_at": firestore.SERVER_TIMESTAMP})
+        _audit(poll_id, "provisional_reject", ident["name"], receipt=receipt)
+        return jsonify({"ok": True, "status": "rejected"}), 200
+
+    member_id = str(data.get("member_id") or "").strip()
+    if not member_id:
+        return jsonify({"error": "bad_request",
+                        "message": "verify requires the matched member_id"}), 400
+
+    # one-member-one-vote guard: if any of their codes was used, this
+    # provisional cannot also count.
+    codes = db.collection(f"{poll_id}__codes")
+    member_codes = list(codes.where("member_id", "==", member_id).stream())
+    if any((c.to_dict() or {}).get("used") for c in member_codes):
+        return jsonify({"error": "member_already_voted"}), 409
+    for c in member_codes:
+        c.reference.update({"used": True, "burned_by": "provisional_adjudication"})
+
+    # promote the sealed answers into the real collections, same split as
+    # cast_vote: identity-linked main record (no q7) + secret delegate ballot.
+    answers = prov.get("answers") or {}
+    main_answers = {k: v for k, v in answers.items() if k != "q7"}
+    nonce = secrets.token_hex(8)
+    ac = canon_answers(main_answers)
+    rh = make_record_hash(receipt, ac, nonce)
+    db.collection(f"{poll_id}__ballots").document(rh).set({
+        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
+        "nonce": nonce, "record_hash": rh,
+        "member_id": member_id, "chapter": prov.get("chapter"),
+        "code_hash": None, "provisional": True,
+        "comment": prov.get("comment", ""),
+        "day_bucket": firestore.SERVER_TIMESTAMP,
+    })
+    dq = {"q7": answers.get("q7") or []}
+    dnonce = secrets.token_hex(8)
+    dcanon = canon_answers(dq)
+    drh = make_record_hash(receipt, dcanon, dnonce)
+    db.collection(f"{poll_id}__delegate_ballots").document(drh).set({
+        "receipt": receipt, "q7": dq["q7"], "answers_canon": dcanon,
+        "nonce": dnonce, "record_hash": drh,
+        "code_hash": None, "provisional": True,
+        "day_bucket": firestore.SERVER_TIMESTAMP,
+    })
+    ref.update({"status": "verified", "member_id": member_id,
+                "adjudicated_by": ident["name"], "adjudicated_at": firestore.SERVER_TIMESTAMP})
+    _audit(poll_id, "provisional_verify", ident["name"], receipt=receipt, member_id=member_id)
+    return jsonify({"ok": True, "status": "verified", "receipt": receipt}), 200
+
+
+# ---- admin: void-and-reissue (never edit) --------------------------------
 @app.post("/p/<poll_id>/admin/void")
 def admin_void(poll_id):
     """Void a cast ballot (flag, never delete) and reissue a fresh code.
@@ -799,7 +1182,8 @@ def admin_void(poll_id):
     never WHAT it says. Permitted only while the chapter's window is open,
     for pre-committed reasons. Voided records stay in the export, flagged,
     excluded from tallies, disclosed in aggregate at certification."""
-    if not ADMIN_TOKEN or request.headers.get("X-Admin-Token") != ADMIN_TOKEN:
+    ident = require_admin(poll_id)
+    if not ident:
         return jsonify({"error": "forbidden"}), 403
     cfg = chapter_or_none(poll_id)
     if not cfg:
@@ -811,10 +1195,10 @@ def admin_void(poll_id):
     data = request.get_json(silent=True) or {}
     receipt = str(data.get("receipt", "")).strip().upper()
     reason = str(data.get("reason", "")).strip()
-    admin = str(data.get("admin", "")).strip()
-    if not receipt or reason not in VOID_REASONS or not admin:
+    admin = str(data.get("admin", "")).strip() or ident["name"]
+    if not receipt or reason not in VOID_REASONS:
         return jsonify({"error": "bad_request",
-                        "message": f"receipt, admin, and reason (one of {sorted(VOID_REASONS)}) required"}), 400
+                        "message": f"receipt and reason (one of {sorted(VOID_REASONS)}) required"}), 400
 
     ballots = db.collection(f"{poll_id}__ballots")
     matches = list(ballots.where("receipt", "==", receipt).stream())

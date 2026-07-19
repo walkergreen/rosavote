@@ -19,16 +19,23 @@ WRITES = []
 
 
 class FakeSnap:
-    def __init__(self, ref, d):
+    def __init__(self, ref, d, exists=True):
         self.reference = ref
-        self._d = d
+        self.id = ref.key
+        self.exists = exists
+        self._d = d or {}
     def to_dict(self):
         return dict(self._d)
+    def get(self, field):
+        return self._d.get(field)
 
 
 class FakeRef:
     def __init__(self, coll, key):
         self.coll, self.key = coll, key
+    def get(self, transaction=None):
+        d = DOCS.get((self.coll, self.key))
+        return FakeSnap(self, d, exists=d is not None)
     def set(self, d):
         DOCS[(self.coll, self.key)] = dict(d)
         WRITES.append((self.coll, d))
@@ -52,6 +59,10 @@ class FakeColl:
         return FakeRef(self.name, k or f"auto{len(DOCS)}")
     def where(self, field, op, val):
         return FakeQuery(self.name, field, val)
+    def stream(self):
+        for (coll, key), d in list(DOCS.items()):
+            if coll == self.name:
+                yield FakeSnap(FakeRef(coll, key), d)
 
 
 fake_fs = types.ModuleType("google.cloud.firestore")
@@ -131,5 +142,106 @@ r = c.post("/p/debs_endorsement__nyc/admin/void", headers=hdr,
 ok(r.status_code == 200 and r.get_json()["new_code"], "void + reissue")
 ok(c.post("/p/debs_endorsement__nyc/admin/void", headers=hdr,
           json={"receipt": receipt, "reason": "stolen_code", "admin": "smoke"}).status_code == 409, "double void 409")
+
+# ---- self-service: console, builder, scoped auth, adjudication, close ----
+import hashlib   # noqa: E402
+import time as _time  # noqa: E402
+
+DAY = 86400
+now = int(_time.time())
+
+# console shell + whoami
+ok("Admin Console" in c.get("/admin/").data.decode(), "console page served")
+ok(c.get("/admin/api/whoami").status_code == 403, "whoami needs token")
+r = c.get("/admin/api/whoami", headers=hdr)
+ok(r.status_code == 200 and r.get_json()["role"] == "national", "whoami national")
+
+# election builder: move NYC into Firestore config with a valid Art. V window
+conv = _time.strftime("%Y-%m-%d", _time.localtime(now + 60 * DAY))
+nyc = vote_service.cfg_to_doc(vote_service.CHAPTERS["debs_endorsement__nyc"])
+nyc.update(name="New York City (Firestore)", opens_at=now - 30 * DAY,
+           closes_at=now + 10 * DAY, convention_date=conv, apportionment_done=True)
+r = c.post("/admin/api/polls/debs_endorsement__nyc", headers=hdr, json=nyc)
+ok(r.status_code == 200, "builder saves valid config")
+ok("New York City (Firestore)" in c.get("/p/debs_endorsement__nyc/").data.decode(),
+   "Firestore config overrides seed")
+
+# Art. V §5: closing 5 days before convention is inside the 45-day quiet period
+r = c.post("/admin/api/polls/debs_endorsement__nyc", headers=hdr,
+           json=dict(nyc, closes_at=now + 55 * DAY))
+ok(r.status_code == 400 and any("Art. V" in e for e in r.get_json()["errors"]),
+   "Art. V window enforced")
+r = c.post("/admin/api/polls/debs_endorsement__nyc", headers=hdr,
+           json=dict(nyc, apportionment_done=False))
+ok(r.status_code == 400 and any("apportion" in e for e in r.get_json()["errors"]),
+   "Art. V apportionment enforced")
+bad = dict(nyc, q7=dict(nyc["q7"], candidates=[{"id": "X1", "name": "A"}, {"id": "X1", "name": "B"}]))
+ok(c.post("/admin/api/polls/debs_endorsement__nyc", headers=hdr, json=bad).status_code == 400,
+   "duplicate candidate ids 400")
+
+# scoped chapter token: sees/touches only its own poll, cannot build elections
+chi_token = "chi-scoped-token-0001"
+DOCS[("config__admins", hashlib.sha256(chi_token.encode()).hexdigest())] = {
+    "name": "Chicago Admins", "role": "chapter", "polls": ["debs_endorsement__chi"], "active": True}
+chi_hdr = {"X-Admin-Token": chi_token}
+chi = vote_service.cfg_to_doc(vote_service.CHAPTERS["debs_endorsement__chi"])
+chi.update(opens_at=now - DAY, closes_at=now + 10 * DAY)
+ok(c.post("/admin/api/polls/debs_endorsement__chi", headers=hdr, json=chi).status_code == 200,
+   "chi config saved")
+r = c.get("/admin/api/polls", headers=chi_hdr)
+ok(r.status_code == 200 and set(r.get_json()) == {"debs_endorsement__chi"},
+   "chapter token sees only own poll")
+ok(c.post("/admin/api/polls/debs_endorsement__chi", headers=chi_hdr, json=chi).status_code == 403,
+   "builder is national-only")
+ok(c.post("/p/debs_endorsement__nyc/admin/void", headers=chi_hdr,
+          json={"receipt": "ZZZZZZZZ", "reason": "stolen_code"}).status_code == 403,
+   "cross-chapter void 403")
+ok(c.post("/p/debs_endorsement__chi/admin/void", headers=chi_hdr,
+          json={"receipt": "ZZZZZZZZ", "reason": "stolen_code"}).status_code == 404,
+   "scoped void reaches own poll")
+
+# provisional adjudication: queue lists identity only; verify promotes + burns codes
+r = c.post("/p/debs_endorsement__nyc/provisional", json={"info": info, "answers": GOOD})
+prcpt = r.get_json()["receipt"]
+r = c.get("/admin/api/polls/debs_endorsement__nyc/provisionals", headers=hdr)
+pend = r.get_json()["pending"]
+ok(any(p["receipt"] == prcpt for p in pend) and all("answers" not in p for p in pend),
+   "queue lists pending, answers stay sealed")
+DOCS[("debs_endorsement__nyc__codes", "unused-code-hash")] = {
+    "used": False, "member_id": "AK-PROV", "chapter": "nyc"}
+before_w = len(WRITES)
+r = c.post(f"/admin/api/polls/debs_endorsement__nyc/provisionals/{prcpt}", headers=hdr,
+           json={"action": "verify", "member_id": "AK-PROV"})
+ok(r.status_code == 200, "provisional verified")
+ok(DOCS[("debs_endorsement__nyc__codes", "unused-code-hash")]["used"] is True,
+   "member's unused code burned on verify")
+pm = next(d for coll, d in WRITES[before_w:] if coll.endswith("__ballots"))
+pd = next(d for coll, d in WRITES[before_w:] if coll.endswith("__delegate_ballots"))
+ok(pm.get("provisional") and pm["member_id"] == "AK-PROV" and "q7" not in pm["answers"]
+   and pm["receipt"] == prcpt, "promoted main ballot identity-linked, no q7")
+ok(pd["q7"] == GOOD["q7"] and "member_id" not in pd and pd["receipt"] == prcpt,
+   "promoted delegate ballot secret")
+ok(c.post(f"/admin/api/polls/debs_endorsement__nyc/provisionals/{prcpt}", headers=hdr,
+          json={"action": "verify", "member_id": "AK-PROV"}).status_code == 409,
+   "double adjudication 409")
+
+# one-member-one-vote: a member who already voted by code cannot be verified
+r = c.post("/p/debs_endorsement__nyc/provisional", json={"info": info, "answers": GOOD})
+p2 = r.get_json()["receipt"]
+DOCS[("debs_endorsement__nyc__codes", "used-code-hash")] = {
+    "used": True, "member_id": "AK-DOUBLE", "chapter": "nyc"}
+ok(c.post(f"/admin/api/polls/debs_endorsement__nyc/provisionals/{p2}", headers=hdr,
+          json={"action": "verify", "member_id": "AK-DOUBLE"}).status_code == 409,
+   "already-voted member blocked")
+ok(c.post(f"/admin/api/polls/debs_endorsement__nyc/provisionals/{p2}", headers=hdr,
+          json={"action": "reject", "note": "duplicate of coded vote"}).status_code == 200,
+   "reject records the decision")
+
+# close-out button: chapter admin closes own poll; votes bounce immediately
+ok(c.post("/admin/api/polls/debs_endorsement__chi/close", headers=chi_hdr, json={}).status_code == 200,
+   "chapter closes own poll")
+ok(c.post("/p/debs_endorsement__chi/vote",
+          json={"code": "TEST-CHI-2026-DEMO", "answers": GOOD}).status_code == 403,
+   "closed poll rejects votes")
 
 print(f"SMOKE TEST: all {passed} checks passed")

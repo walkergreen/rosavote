@@ -54,7 +54,10 @@ Q3 = {
 }
 
 
-# Per-chapter contests — KEEP IN SYNC with CHAPTERS in vote_service.py.
+# Per-chapter contests — built-in FALLBACK only. When run with
+# --from-firestore, refresh_registry_from_firestore() overlays these from
+# config__polls (the same source of truth the vote service reads), so the
+# old keep-in-sync-with-CHAPTERS gotcha only applies to offline CSV runs.
 Q6_TITLES = {
     "debs_endorsement__nyc": "NYC - Charter a fourth branch in the Bronx?",
     "debs_endorsement__chi": "Chicago - Permanent chapter office in Pilsen?",
@@ -92,6 +95,30 @@ Q7_CONTESTS = {
         "labels": {"OHARE": "Kate Richards O'Hare", "BERGER": "Victor Berger", "BLOOR": "Ella Reeve Bloor",
                    "HARRISON": "Hubert Harrison", "LITTLE": "Frank Little"}},
 }
+
+
+def refresh_registry_from_firestore(project):
+    """Overlay the contest registries from config__polls so BLT titles,
+    slates, and seat counts always match what the vote service served."""
+    from google.cloud import firestore
+    db = firestore.Client(project=project)
+    for doc in db.collection("config__polls").stream():
+        d = doc.to_dict() or {}
+        pid, name = doc.id, d.get("name", doc.id)
+        if d.get("q6"):
+            Q6_TITLES[pid] = f"{name} - {d['q6']}"
+        if d.get("q8"):
+            Q8_TITLES[pid] = f"{name} - {d['q8']}"
+        q7 = d.get("q7") or {}
+        cands = [(c["id"], c["name"]) if isinstance(c, dict) else (c[0], c[1])
+                 for c in (q7.get("candidates") or [])]
+        if cands:
+            Q7_CONTESTS[pid] = {
+                "seats": int(q7.get("seats", 1)),
+                "alternates": int(q7.get("alternates", 0)),
+                "candidates": [cid for cid, _ in cands],
+                "labels": dict(cands),
+            }
 
 
 def q8_contest(poll_id):
@@ -265,6 +292,10 @@ def main():
         else:  # legacy single-file exports that still carry q7 inline
             delegate_rankings = [a for a in all_answers if a.get("q7")]
     else:
+        try:
+            refresh_registry_from_firestore(args.project)
+        except Exception as e:
+            print(f"note: using built-in contest registry (config__polls unavailable: {e})")
         all_answers = list(load_answers_from_firestore(args.project, args.poll_id))
         delegate_rankings = list(load_delegate_rankings_from_firestore(args.project, args.poll_id))
 

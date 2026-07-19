@@ -1,0 +1,351 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Ballot Admin Console — DSA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root{--dsa:#dd1111;--cream:#fff5e5;--tan:#ffe1b2;--ink:#000;
+    --disp:"Barlow Condensed","Arial Narrow",sans-serif;--body:"Alegreya",Georgia,serif;--ui:"Barlow",system-ui,sans-serif;}
+  *{box-sizing:border-box}html,body{margin:0;padding:0}
+  body{font-family:var(--ui);background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100dvh;display:flex;flex-direction:column}
+  .band{background:#000;color:var(--cream);padding:14px 16px 12px}
+  .band-in{max-width:760px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .wm{font-family:var(--disp);font-weight:900;text-transform:uppercase;font-size:1.9rem;line-height:.88}
+  .wm small{display:block;font-size:.92rem;font-weight:800;opacity:.88;letter-spacing:.02em;margin-top:2px}
+  .rose{font-family:var(--disp);font-weight:900;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;border:2px solid var(--cream);padding:5px 8px 4px;text-align:center;line-height:1.05;flex:none;color:inherit;text-decoration:none;display:block}
+  main{flex:1;width:100%;max-width:760px;margin:0 auto;padding:18px 14px 40px}
+  .marks{height:7px;background-image:repeating-linear-gradient(to right,#dd1111 0 7px,transparent 7px 18px);background-size:100% 7px;background-repeat:repeat-x}
+  .card{background:#fff;border:1px solid var(--ink);box-shadow:6px 6px 0 0 var(--ink);margin-top:14px}
+  .card-band{background:var(--dsa);color:#fff;padding:10px 14px;font-family:var(--disp);font-weight:800;text-transform:uppercase;font-size:1.35rem;display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .card-band.black{background:#000}
+  .card-body{padding:16px 14px 18px}
+  .kicker{font-weight:700;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--dsa);margin:0 0 6px}
+  p{font-size:.95rem;line-height:1.45;margin:0 0 12px}
+  label{display:block;font-weight:700;font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;margin:12px 0 4px}
+  input[type=text],input[type=password],input[type=number],input[type=date],input[type=datetime-local],textarea,select{
+    width:100%;padding:10px;border:1px solid var(--ink);background:var(--cream);font-family:var(--ui);font-size:.95rem}
+  textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:.88rem}
+  .btn{display:inline-flex;align-items:center;justify-content:center;min-height:42px;margin-top:12px;padding:8px 16px;
+    font-family:var(--disp);font-weight:800;font-size:1.1rem;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--cream);background:var(--dsa);border:1px solid var(--ink);box-shadow:4px 4px 0 0 var(--ink);cursor:pointer}
+  .btn:hover{background:#ef3232}
+  .btn.dark{background:#000}.btn.dark:hover{background:#333}
+  .btn.ghost{background:#fff;color:var(--ink)}.btn.ghost:hover{background:var(--tan)}
+  .btn.sm{min-height:34px;font-size:.95rem;padding:4px 12px;margin-top:0}
+  .row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:140px}
+  .chip{font-family:var(--disp);font-weight:800;font-size:.8rem;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border:1px solid var(--ink)}
+  .chip.open{background:#c9f3c9}.chip.closed{background:#f3c9c9}.chip.not_open{background:var(--tan)}
+  .poll{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--ink);margin:0 0 10px;background:#fff;flex-wrap:wrap}
+  .poll b{font-family:var(--disp);font-size:1.2rem;text-transform:uppercase}
+  .poll code{font-size:.78rem;color:rgba(0,0,0,.6)}
+  .msg{border:1px solid var(--ink);padding:10px 12px;margin:12px 0 0;font-size:.88rem;line-height:1.4;white-space:pre-wrap}
+  .msg.err{background:#f3c9c9}.msg.okc{background:#c9f3c9}.msg.warn{background:var(--tan)}
+  .provrow{border:1px solid var(--ink);padding:10px 12px;margin:0 0 10px;background:#fff;font-size:.9rem}
+  .provrow b{font-family:var(--disp);font-size:1.1rem;text-transform:uppercase}
+  .provrow .fields{margin:6px 0;line-height:1.5}
+  .newcode{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:1.1rem;letter-spacing:.06em;background:var(--cream);border:1px dashed var(--ink);padding:6px 12px;display:inline-block;margin-top:8px}
+  .tabs{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+  .tab{font-family:var(--disp);font-weight:800;font-size:1.05rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:8px 14px;border:1px solid var(--ink);background:#fff;cursor:pointer}
+  .tab.on{background:var(--dsa);color:var(--cream)}
+  .hide{display:none}
+  footer{font-size:.68rem;color:rgba(0,0,0,.55);text-align:center;padding:14px 16px 22px;line-height:1.5}
+  footer b{color:var(--dsa)}
+</style></head><body>
+<header class="band"><div class="band-in">
+  <div class="wm">Admin Console<small>DSA Chapter Member Ballot</small></div>
+  <a class="rose" href="/">DSA<br/>Vote</a>
+</div></header>
+<main>
+  <div class="marks"></div>
+
+  <div class="card" id="login-card">
+    <div class="card-band black">Sign In</div>
+    <div class="card-body">
+      <p class="kicker">Scoped admin token</p>
+      <p>Enter your admin token. National tokens see every poll; chapter tokens
+      see only their own. All actions are recorded in the audit log under your
+      token's name.</p>
+      <label for="tok">Admin token</label>
+      <input type="password" id="tok" autocomplete="off"/>
+      <button class="btn" id="login-btn">Sign in</button>
+      <div id="login-msg"></div>
+    </div>
+  </div>
+
+  <div id="console" class="hide">
+    <div class="card">
+      <div class="card-band black">Signed In<button class="btn ghost sm" id="logout-btn">Sign out</button></div>
+      <div class="card-body" style="padding:10px 14px">
+        <p style="margin:0" id="whoami-line"></p>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab on" data-pane="polls-pane">Polls</button>
+      <button class="tab" data-pane="builder-pane">Election Builder</button>
+      <button class="tab" data-pane="prov-pane">Provisionals</button>
+      <button class="tab" data-pane="void-pane">Void &amp; Reissue</button>
+    </div>
+
+    <div class="card" id="polls-pane">
+      <div class="card-band">Polls<button class="btn ghost sm" id="refresh-btn">Refresh</button></div>
+      <div class="card-body" id="polls-list"><p>Loading…</p></div>
+    </div>
+
+    <div class="card hide" id="builder-pane">
+      <div class="card-band">Election Builder</div>
+      <div class="card-body">
+        <p class="kicker">National admins only</p>
+        <p>Art. V §5 is enforced on save: with a convention date set, the whole
+        voting window must fall between 4 months and 45 days before it, and
+        apportionment must be confirmed done.</p>
+        <label>Poll ID <small>(lowercase; new ID creates a poll)</small></label>
+        <input type="text" id="b-pid" placeholder="debs_endorsement__nyc"/>
+        <label>Chapter display name</label>
+        <input type="text" id="b-name"/>
+        <div class="row">
+          <div><label>Opens at</label><input type="datetime-local" id="b-opens"/></div>
+          <div><label>Closes at</label><input type="datetime-local" id="b-closes"/></div>
+        </div>
+        <div class="row">
+          <div><label>Convention date</label><input type="date" id="b-conv"/></div>
+          <div><label style="margin-bottom:14px">Apportionment done</label>
+            <input type="checkbox" id="b-app" style="width:22px;height:22px"/></div>
+        </div>
+        <label>Test code (optional, repeatable, never recorded)</label>
+        <input type="text" id="b-test"/>
+        <label>Local issue 1 (stored as q6 — displays as Q7)</label>
+        <input type="text" id="b-q6"/>
+        <label>Local issue 2 (stored as q8 — displays as Q8)</label>
+        <input type="text" id="b-q8"/>
+        <div class="row">
+          <div><label>Delegate seats</label><input type="number" id="b-seats" min="1"/></div>
+          <div><label>Alternates</label><input type="number" id="b-alts" min="0"/></div>
+          <div><label>Real delegates</label><input type="number" id="b-rdel" min="0"/></div>
+          <div><label>Real alternates</label><input type="number" id="b-ralt" min="0"/></div>
+        </div>
+        <label>Delegate candidates — one per line: <code>ID | Display Name</code></label>
+        <textarea id="b-cands" placeholder="LONDON | Meyer London&#10;FLYNN | Elizabeth Gurley Flynn"></textarea>
+        <button class="btn" id="b-save">Save poll</button>
+        <div id="b-msg"></div>
+      </div>
+    </div>
+
+    <div class="card hide" id="prov-pane">
+      <div class="card-band">Provisional Adjudication</div>
+      <div class="card-body">
+        <p>Sealed provisionals: identity fields only — the ballot answers stay
+        sealed. <b>Verify</b> needs the matched member ID; it burns the member's
+        unused codes and promotes the sealed ballot. <b>Reject</b> records a note.
+        If the member already voted by code, verification is refused.</p>
+        <label>Poll</label>
+        <select id="prov-poll"></select>
+        <button class="btn dark sm" id="prov-load" style="margin-top:10px">Load queue</button>
+        <div id="prov-list" style="margin-top:12px"></div>
+        <div id="prov-msg"></div>
+      </div>
+    </div>
+
+    <div class="card hide" id="void-pane">
+      <div class="card-band">Void &amp; Reissue</div>
+      <div class="card-body">
+        <p>Flags the ballot voided (kept forever, excluded from tallies) and
+        issues the member a fresh code — shown once, deliver it securely.
+        Open-window only; every action is audited.</p>
+        <label>Poll</label>
+        <select id="void-poll"></select>
+        <label>Ballot receipt</label>
+        <input type="text" id="void-receipt" placeholder="A1B2C3D4"/>
+        <label>Reason</label>
+        <select id="void-reason">
+          <option value="stolen_code">stolen_code</option>
+          <option value="technical_failure">technical_failure</option>
+          <option value="provisional_adjudication">provisional_adjudication</option>
+        </select>
+        <button class="btn" id="void-btn">Void &amp; reissue</button>
+        <div id="void-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="marks" style="margin-top:18px"></div>
+</main>
+<footer><b>Democratic Socialists of America</b> &middot; Chapter Member Ballot &middot; Admin Console<br/>Built by DSA Staff&rsquo;s Data &amp; Tech Department</footer>
+<script>
+"use strict";
+var TOKEN = sessionStorage.getItem("admin_token") || "";
+var POLLS = {};
+function $(id){ return document.getElementById(id); }
+function esc(s){ var d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
+function msg(id, cls, text){ $(id).innerHTML = text ? '<div class="msg '+cls+'">'+esc(text)+"</div>" : ""; }
+function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"X-Admin-Token": TOKEN, "Content-Type": "application/json"}, opts.headers||{});
+  return fetch(path, opts).then(function(r){ return r.json().then(function(j){ return {status:r.status, body:j}; }); });
+}
+function fmtTs(ts){ return ts ? new Date(ts*1000).toLocaleString() : "—"; }
+function toLocalInput(ts){
+  if(!ts) return "";
+  var d = new Date(ts*1000), p=function(n){return String(n).padStart(2,"0");};
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());
+}
+function fromLocalInput(v){ return v ? Math.floor(new Date(v).getTime()/1000) : null; }
+
+// ---- sign in ----
+function boot(){
+  api("/admin/api/whoami").then(function(r){
+    if(r.status !== 200){ sessionStorage.removeItem("admin_token"); return; }
+    $("login-card").classList.add("hide");
+    $("console").classList.remove("hide");
+    $("whoami-line").innerHTML = "<b>"+esc(r.body.name)+"</b> &middot; "+esc(r.body.role)+
+      (r.body.role==="chapter" ? " &middot; "+esc((r.body.polls||[]).join(", ")) : "");
+    loadPolls();
+  });
+}
+$("login-btn").onclick = function(){
+  TOKEN = $("tok").value.trim();
+  if(!TOKEN) return;
+  sessionStorage.setItem("admin_token", TOKEN);
+  msg("login-msg","warn","Checking…");
+  api("/admin/api/whoami").then(function(r){
+    if(r.status===200){ msg("login-msg","",""); boot(); }
+    else msg("login-msg","err","Token not recognized (or admin surface disabled).");
+  });
+};
+$("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); location.reload(); };
+
+// ---- tabs ----
+Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){
+  t.onclick = function(){
+    Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(x){ x.classList.remove("on"); });
+    ["polls-pane","builder-pane","prov-pane","void-pane"].forEach(function(p){ $(p).classList.add("hide"); });
+    t.classList.add("on"); $(t.dataset.pane).classList.remove("hide");
+  };
+});
+
+// ---- polls ----
+function loadPolls(){
+  api("/admin/api/polls").then(function(r){
+    if(r.status!==200){ $("polls-list").innerHTML="<p>Failed to load.</p>"; return; }
+    POLLS = r.body;
+    var ids = Object.keys(POLLS);
+    $("polls-list").innerHTML = ids.length ? "" : "<p>No polls visible to this token.</p>";
+    ids.forEach(function(pid){
+      var c = POLLS[pid];
+      var div = document.createElement("div"); div.className="poll";
+      div.innerHTML = "<div><b>"+esc(c.name)+"</b> <span class='chip "+esc(c.state)+"'>"+esc(c.state.replace("_"," "))+"</span><br/>"+
+        "<code>"+esc(pid)+"</code><br/><small>opens "+esc(fmtTs(c.opens_at))+" &middot; closes "+esc(fmtTs(c.closes_at))+"</small></div>";
+      var btns = document.createElement("div");
+      var edit = document.createElement("button"); edit.className="btn ghost sm"; edit.textContent="Edit";
+      edit.onclick = function(){ fillBuilder(pid, c); };
+      var close = document.createElement("button"); close.className="btn dark sm"; close.style.marginLeft="6px"; close.textContent="Close now";
+      close.onclick = function(){
+        if(!confirm("Close voting for "+c.name+" now? Voters will immediately be unable to cast ballots.")) return;
+        api("/admin/api/polls/"+pid+"/close", {method:"POST", body:"{}"}).then(function(r2){
+          if(r2.status===200) loadPolls(); else alert("Close failed: "+JSON.stringify(r2.body));
+        });
+      };
+      btns.appendChild(edit); btns.appendChild(close); div.appendChild(btns);
+      $("polls-list").appendChild(div);
+    });
+    ["prov-poll","void-poll"].forEach(function(sel){
+      $(sel).innerHTML = ids.map(function(pid){ return "<option value='"+esc(pid)+"'>"+esc(POLLS[pid].name)+" ("+esc(pid)+")</option>"; }).join("");
+    });
+  });
+}
+$("refresh-btn").onclick = loadPolls;
+
+// ---- builder ----
+function fillBuilder(pid, c){
+  document.querySelector('[data-pane="builder-pane"]').click();
+  $("b-pid").value = pid; $("b-name").value = c.name || "";
+  $("b-opens").value = toLocalInput(c.opens_at); $("b-closes").value = toLocalInput(c.closes_at);
+  $("b-conv").value = c.convention_date || ""; $("b-app").checked = !!c.apportionment_done;
+  $("b-test").value = c.test_code || ""; $("b-q6").value = c.q6 || ""; $("b-q8").value = c.q8 || "";
+  var q7 = c.q7 || {};
+  $("b-seats").value = q7.seats || 1; $("b-alts").value = q7.alternates || 0;
+  $("b-rdel").value = q7.real_delegates || 0; $("b-ralt").value = q7.real_alternates || 0;
+  $("b-cands").value = (q7.candidates||[]).map(function(x){ return x.id+" | "+x.name; }).join("\n");
+  msg("b-msg","","");
+}
+$("b-save").onclick = function(){
+  var cands = $("b-cands").value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean)
+    .map(function(l){ var i=l.indexOf("|"); return {id:(i<0?l:l.slice(0,i)).trim(), name:(i<0?"":l.slice(i+1)).trim()}; });
+  var body = {
+    name: $("b-name").value, q6: $("b-q6").value, q8: $("b-q8").value,
+    test_code: $("b-test").value,
+    opens_at: fromLocalInput($("b-opens").value), closes_at: fromLocalInput($("b-closes").value),
+    convention_date: $("b-conv").value || null, apportionment_done: $("b-app").checked,
+    q7: {seats:+$("b-seats").value||0, alternates:+$("b-alts").value||0,
+         real_delegates:+$("b-rdel").value||0, real_alternates:+$("b-ralt").value||0, candidates:cands}
+  };
+  msg("b-msg","warn","Saving…");
+  api("/admin/api/polls/"+$("b-pid").value.trim(), {method:"POST", body:JSON.stringify(body)}).then(function(r){
+    if(r.status===200){
+      msg("b-msg","okc","Saved."+(r.body.warnings&&r.body.warnings.length ? "\nWarnings:\n- "+r.body.warnings.join("\n- ") : ""));
+      loadPolls();
+    } else {
+      var e = r.body.errors ? r.body.errors.join("\n- ") : JSON.stringify(r.body);
+      msg("b-msg","err","Not saved:\n- "+e);
+    }
+  });
+};
+
+// ---- provisionals ----
+$("prov-load").onclick = function(){
+  var pid = $("prov-poll").value;
+  msg("prov-msg","warn","Loading…");
+  api("/admin/api/polls/"+pid+"/provisionals").then(function(r){
+    msg("prov-msg","","");
+    if(r.status!==200){ msg("prov-msg","err","Failed: "+JSON.stringify(r.body)); return; }
+    var list = $("prov-list"); list.innerHTML = r.body.pending.length ? "" : "<p>No pending provisionals. 🎉</p>";
+    r.body.pending.forEach(function(p){
+      var div = document.createElement("div"); div.className="provrow";
+      div.innerHTML = "<b>"+esc(p.receipt)+"</b><div class='fields'>"+
+        esc(p.first)+" "+esc(p.last)+" &middot; "+esc(p.chapter)+"<br/>"+
+        "Emails: "+esc(p.emails)+"<br/>Phones: "+esc(p.phones||"—")+
+        "<br/>Joined: "+esc(p.join_date||"—")+" &middot; Alt names: "+esc(p.alt_names||"—")+"</div>";
+      var mi = document.createElement("input"); mi.type="text"; mi.placeholder="Matched member ID (AK…)"; mi.style.marginBottom="8px";
+      var v = document.createElement("button"); v.className="btn sm"; v.textContent="Verify";
+      var x = document.createElement("button"); x.className="btn dark sm"; x.textContent="Reject"; x.style.marginLeft="6px";
+      function adjudicate(action){
+        var body = {action:action};
+        if(action==="verify"){
+          if(!mi.value.trim()){ alert("Verify needs the matched member ID."); return; }
+          body.member_id = mi.value.trim();
+        } else {
+          var note = prompt("Rejection note (kept in the record):", ""); if(note===null) return;
+          body.note = note;
+        }
+        api("/admin/api/polls/"+pid+"/provisionals/"+p.receipt, {method:"POST", body:JSON.stringify(body)}).then(function(r2){
+          if(r2.status===200){ div.remove(); msg("prov-msg","okc",p.receipt+" "+r2.body.status+"."); }
+          else msg("prov-msg","err",p.receipt+": "+JSON.stringify(r2.body));
+        });
+      }
+      v.onclick = function(){ adjudicate("verify"); };
+      x.onclick = function(){ adjudicate("reject"); };
+      div.appendChild(mi); div.appendChild(v); div.appendChild(x);
+      list.appendChild(div);
+    });
+  });
+};
+
+// ---- void ----
+$("void-btn").onclick = function(){
+  var pid = $("void-poll").value, receipt = $("void-receipt").value.trim();
+  if(!receipt){ msg("void-msg","err","Receipt required."); return; }
+  if(!confirm("Void ballot "+receipt+" and reissue a fresh code? This cannot be undone.")) return;
+  msg("void-msg","warn","Working…");
+  api("/p/"+pid+"/admin/void", {method:"POST",
+      body: JSON.stringify({receipt:receipt, reason:$("void-reason").value})}).then(function(r){
+    if(r.status===200)
+      $("void-msg").innerHTML = '<div class="msg okc">Voided '+esc(r.body.receipt_voided)+
+        '. New code (shown once):<br/><span class="newcode">'+esc(r.body.new_code)+"</span></div>";
+    else msg("void-msg","err","Failed: "+JSON.stringify(r.body));
+  });
+};
+
+if(TOKEN) boot();
+</script>
+</body></html>

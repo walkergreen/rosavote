@@ -13,10 +13,19 @@ gcloud run deploy member-ballot-v2 --source ballot-v2 --region us-east1 \
   --allow-unauthenticated [--set-env-vars ADMIN_TOKEN=<hex>]
 
 # full offline smoke test (no GCP credentials needed — stubs Firestore):
-python3 tools/smoke_test.py
+python3 tools/smoke_test.py       # use .venv/bin/python if flask isn't global
+
+# local clickable dev server, stub Firestore, admin token "dev":
+python3 tools/dev_server.py       # http://localhost:8080
 
 # syntax-check the template's inline JS after editing it:
 python3 -c "import re; open('/tmp/t.js','w').write(re.search(r'<script>(.*)</script>', open('ballot_template.html').read(), re.S).group(1).replace('__Q7_NAMES__','{}'))" && node --check /tmp/t.js
+# (this machine has no node — loading the page in a browser and checking the
+# console for errors is the fallback; same applies to admin_console.html)
+
+# seed Firestore config / mint scoped admin tokens (needs GCP creds):
+python3 tools/seed_config.py polls
+python3 tools/seed_config.py admin --name "NYC admins" --role chapter --polls debs_endorsement__nyc
 ```
 
 There is no build step. The Dockerfile serves `vote_service.py` + template via
@@ -26,9 +35,16 @@ gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
 
 - `vote_service.py` — the whole backend: routing (`/p/<poll_id>/...`), the
   branded splash at `/` (test codes + a 13-expander admin explainer),
-  `CHAPTERS` registry, answer validation, the vote transaction, provisional
-  ballots, admin void-and-reissue (`POST /p/<poll_id>/admin/void`, gated by
-  `ADMIN_TOKEN` env var — disabled if unset).
+  answer validation, the vote transaction, provisional ballots, and the whole
+  admin surface: scoped auth (`require_admin`), election builder w/ Art. V
+  validation (`/admin/api/polls*`), provisional adjudication queue
+  (verify=promote+burn codes / reject), close-out, void-and-reissue
+  (`POST /p/<poll_id>/admin/void`). Poll config comes from Firestore
+  `config__polls` via `load_polls()` (60s cache); the in-code `CHAPTERS` dict
+  is only the fallback seed until `tools/seed_config.py polls` has run.
+- `admin_console.html` — single-file branded console served at `/admin/`
+  (token sign-in, polls list, builder, adjudication, void). Static shell;
+  every API it calls is token-gated.
 - `ballot_template.html` — single-file branded ballot (all CSS/JS inline).
   Server injects: `__POLL_ID__ __CHAPTER_NAME__ __CODE__ __Q6_QUESTION__
   __Q8_QUESTION__ __Q7_OPTIONS__ __Q7_NOTE__ __Q7_SEATS__ __Q7_ALTS__
@@ -69,7 +85,13 @@ Do not "fix" this by renaming keys — Firestore data and tools reference them.
   `voided` flag (never delete; excluded from tallies, kept in chain).
 - `{poll}__provisional` — sealed self-serve provisionals (name, all emails,
   phones, chapter, join date, alt names + full answers) pending adjudication.
-- `{poll}__audit_log` — append-only admin actions (void_reissue etc).
+- `{poll}__audit_log` — append-only admin actions (void_reissue,
+  config_save, close_poll, provisional_verify/reject).
+- `config__polls` — poll configs (source of truth once seeded; candidates
+  stored as `[{id, name}]` because Firestore forbids nested arrays).
+- `config__admins` — admin tokens, keyed by SHA-256(token): `{name, role:
+  national|chapter, polls: [...], active}`. `ADMIN_TOKEN` env stays as the
+  national break-glass; if unset AND no docs exist, admin surface is off.
 
 ## Decided policy (do not silently change)
 
@@ -94,9 +116,11 @@ Do not "fix" this by renaming keys — Firestore data and tools reference them.
 
 ## Gotchas
 
-- `CHAPTERS` in vote_service.py and the contest registries in
-  `tools/make_blt.py` (Q6_TITLES/Q8_TITLES/Q7_CONTESTS) are DUPLICATED —
-  keep in sync (self-service roadmap: move both to Firestore/BigQuery config).
+- Contest registries in `tools/make_blt.py` are overlaid from `config__polls`
+  on `--from-firestore` runs; the built-ins are only an offline-CSV fallback
+  (sync gotcha now limited to that path).
+- Poll config edits force-reload only the serving instance's cache; other
+  Cloud Run instances converge within 60s (CFG_TTL_SECONDS).
 - Template is one file with inline JS; always node --check after edits.
 - Splash HTML lives inside vote_service.py (SPLASH string).
 - Test codes must match CODE_RE (`[A-Za-z0-9_-]{12,64}`).
@@ -113,11 +137,12 @@ tabulator — validates BLTs from make_blt), `Election-Integrity-Plan.docx`
 deploys: services `member-ballot`, `referendum-prototype` — candidates for
 deletion).
 
-## Roadmap (agreed, not started)
+## Roadmap
 
-1. Self-service: move CHAPTERS/ballot config to Firestore; admin console
-   (election builder w/ Art. V validation baked in, roll picker + code gen,
-   adjudication queue, void UI, close-out button); scoped chapter-admin auth.
+1. ~~Self-service~~ DONE (2026-07-19): config in Firestore, admin console at
+   `/admin/` (builder + Art. V validation, adjudication queue, void UI,
+   close-out), scoped chapter-admin tokens. Still open from this item:
+   roll picker + code gen in the console (blocked on roadmap #2).
 2. Wire generate_codes.py to the real primary-AKID roll schema.
 3. Cloud Scheduler close-out automation; Cloud Armor; min/max instances;
    Secret Manager; billing alerts.
