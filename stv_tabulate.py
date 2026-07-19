@@ -161,10 +161,12 @@ def count(blt_text: str):
         if surpluses:
             hi = max(totals[c] for c in surpluses)
             c = tiebreak([x for x in surpluses if totals[x] == hi], want_high=True)
-            surplus = totals[c] - quota
+            total_before = totals[c]
+            surplus = total_before - quota
             transfer(c, surplus)
             declare_elected()
-            snapshot(f"Surplus of {names[c - 1]} ({fmt(surplus)}) transferred")
+            snapshot(f"Surplus votes of {names[c - 1]} transferred at value "
+                     f"{fmt(surplus)}/{fmt(total_before)}")
             continue
         # otherwise exclude the lowest (rules 50, 51)
         lo = min(totals[c] for c in continuing)
@@ -172,7 +174,8 @@ def count(blt_text: str):
         state[c] = "excluded"
         transfer(c, None)
         declare_elected()
-        snapshot(f"{names[c - 1]} excluded, papers transferred at received value")
+        snapshot(f"{names[c - 1]} excluded ({fmt(lo)} votes); papers transferred "
+                 "at the value they were received")
 
     return {
         "title": title,

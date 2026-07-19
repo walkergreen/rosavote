@@ -757,7 +757,7 @@ def provisional(poll_id):
 
 SPLASH = """<!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>DSA Chapter Member Ballot</title>
+<title>DSA Vote — Chapter Member Ballot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -796,8 +796,8 @@ SPLASH = """<!doctype html><html lang="en"><head>
   footer b{color:var(--dsa)}
 </style></head><body>
 <header class="band"><div class="band-in">
-  <div class="wm">Chapter Member Ballot<small>Democratic Socialists of America</small></div>
-  <a class="rose" href="/" style="color:inherit;text-decoration:none;display:block;">DSA<br/>Vote</a>
+  <div class="wm">DSA Vote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
+  <a class="rose" href="/" style="color:inherit;text-decoration:none;display:block;font-size:1.3rem;line-height:1;">🌹</a>
 </div></header>
 <main>
   <div class="marks"></div>
@@ -1153,7 +1153,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>Democratic Socialists of America</b> &middot; Chapter Member Ballot &middot; Prototype build &mdash; not a live election.<br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built by DSA Staff&rsquo;s Data &amp; Tech Department</footer>
+<footer><b>DSA Vote</b> &middot; Prototype build &mdash; not a live election &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
 </body></html>"""
 
 
@@ -1661,12 +1661,17 @@ def cron_closeout():
 WEIGHT_MIN, WEIGHT_MAX = 1, 1000
 
 
-def _blt_text(rows, key, options, seats, title="contest"):
+def _blt_text(rows, key, options, seats, title="contest", withdrawn=()):
     """In-memory BLT (same shape make_blt writes) for the STV tabulator.
     rows: (answers_dict, weight) pairs — BLT carries integer ballot weights
-    natively, so weighted polls verify in any standard tabulator."""
+    natively, so weighted polls verify in any standard tabulator.
+    `withdrawn`: option ids to mark withdrawn (BLT negative-number line) —
+    the dropout-recount path."""
     idx = {o["id"]: i + 1 for i, o in enumerate(options)}
     lines = [f"{len(options)} {seats}"]
+    wd = [idx[w] for w in withdrawn if w in idx]
+    if wd:
+        lines.append(" ".join(f"-{n}" for n in sorted(wd)))
     for a, w in rows:
         ranking = [str(x).upper() for x in (a.get(key) or [])]
         if not ranking or ranking == ["ABSTAIN"]:
@@ -1887,12 +1892,188 @@ def admin_export_blt(poll_id, qkey):
         if request.args.get("recount"):
             seats += int(q.get("alternates", 0))
         rows = secret_rows if q.get("secret") else main_rows
+    withdrawn = [w.strip().upper() for w in
+                 str(request.args.get("withdraw", "")).split(",") if w.strip()]
     blt = _blt_text(rows, qkey, options, seats,
                     title=f"{cfg.get('name', poll_id)} - {q['title']}"
-                          + (" - ALTERNATES RECOUNT" if request.args.get("recount") else ""))
+                          + (" - ALTERNATES RECOUNT" if request.args.get("recount") else "")
+                          + (f" - WITHDRAWN: {','.join(withdrawn)}" if withdrawn else ""),
+                    withdrawn=withdrawn)
     fname = f"{poll_id}_{qkey}" + ("_alternates_recount" if request.args.get("recount") else "") + ".blt"
     return Response(blt, mimetype="text/plain",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+
+def _results_txt(res: dict) -> str:
+    out = [f"DSA Vote Election Results", "", res.get("name") or res["poll_id"], ""]
+    out.append(f"Ballots counted: {res['ballots_counted']}"
+               + ("  (WEIGHTED — ballots count at each voter's weight)" if res.get("weighted") else ""))
+    out.append("")
+    for q in res["questions"]:
+        out.append("=" * 72)
+        out.append(q["title"] + ("   [secret ballot]" if q.get("secret") else ""))
+        if q["type"] == "yesno":
+            c = q["counts"]
+            out.append(f"  Yes {c['YES']} · No {c['NO']} · Abstain {c['ABSTAIN']}"
+                       f"  ->  {q['result']} (abstentions excluded)")
+        elif q["type"] == "ranked":
+            out.append(f"  Scottish STV · {q['seats']} seat(s) · "
+                       f"{q['valid_ballots']} valid ballots · quota {q['quota']}")
+            for st in q["stages"]:
+                out.append(f"  Stage {st['stage']}: {st['action']}")
+                for name, v in sorted(st["totals"].items(), key=lambda kv: -kv[1]):
+                    mark = {"elected": "  ELECTED", "excluded": "  excluded"}.get(
+                        st["status"].get(name, ""), "")
+                    out.append(f"      {name:<40} {v:>12g}{mark}")
+                out.append(f"      {'(non-transferable)':<40} {st['nontransferable']:>12g}")
+            out.append(f"  WINNERS: {', '.join(q['winners'])}")
+            if q.get("alternates"):
+                out.append(f"  ALTERNATES (two-count recount): {', '.join(q['alternates'])}")
+        elif q["type"] == "multi":
+            for name, v in q["counts"].items():
+                out.append(f"      {name:<40} {v:>8}")
+        elif q["type"] == "text":
+            out.append(f"  {q['responses']} free-text response(s) — content stays sealed")
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def _results_csv(res: dict) -> str:
+    rows = [f'"Election for","{res.get("name") or res["poll_id"]}"',
+            f'"Ballots counted",{res["ballots_counted"]}',
+            f'"Weighted","{bool(res.get("weighted"))}"', '"DSA Vote",""']
+    for q in res["questions"]:
+        rows.append("")
+        rows.append(f'"Contest","{q["title"]}"')
+        if q["type"] == "ranked":
+            rows.append(f'"Election rules","Scottish STV"')
+            rows.append(f'"Seats",{q["seats"]},"Quota",{q["quota"]},"Valid votes",{q["valid_ballots"]}')
+            cands = list(q["stages"][0]["totals"])
+            rows.append('"Candidates",' + ",".join(f'"Stage {st["stage"]}"' for st in q["stages"]))
+            for cand in cands:
+                cells = []
+                for st in q["stages"]:
+                    v = st["totals"].get(cand)
+                    cells.append("-" if v is None else f"{v:g}")
+                elected = "Elected" if cand in q["winners"] else ""
+                rows.append(f'"{cand}",' + ",".join(cells) + (f',"{elected}"' if elected else ""))
+            rows.append('"Non-transferable",' +
+                        ",".join(f'{st["nontransferable"]:g}' for st in q["stages"]))
+        elif q["type"] in ("yesno", "multi"):
+            for name, v in q["counts"].items():
+                rows.append(f'"{name}",{v}')
+            if q["type"] == "yesno":
+                rows.append(f'"Result","{q["result"]}"')
+        elif q["type"] == "text":
+            rows.append(f'"Responses",{q["responses"]}')
+    return "\n".join(rows) + "\n"
+
+
+VERIFY_README = """HOW TO INDEPENDENTLY VERIFY THESE RESULTS
+==========================================
+
+1. The .blt files in this archive are the complete anonymous ballots for
+   each contest, in the standard BLT format (OpaVote / OpenSTV compatible).
+   Ballot weights ride in the first number of each ballot line.
+
+2. Recount them in software DSA does not control:
+     - upload a .blt to OpaVote (choose Scottish STV), or
+     - run OpenSTV / Droop, or
+     - run the tabulator shipped with this codebase:
+         python3 tools/stv_tabulate.py <contest>.blt
+   The round-by-round table must match results.txt exactly.
+
+3. Delegate alternates use the TWO-COUNT method: the *_alternates_recount.blt
+   file is the same ballots with seats set to delegates+alternates. Winners
+   there who are not already delegates are the alternates, in order of
+   election.
+
+4. results.json is the machine-readable equivalent (for scripts, archives,
+   and future audits). ballots.csv lists each stored ballot record with its
+   receipt and record hash; voters can confirm their own receipt at
+   /p/<poll>/verify?receipt=... without revealing any content.
+
+5. After certification, the close-out export also publishes a tamper-evident
+   hash chain over every ballot record (tools/build_chain.py, checked by
+   tools/verify.py).
+"""
+
+
+@app.get("/admin/api/polls/<poll_id>/export.zip")
+def admin_export_zip(poll_id):
+    """One-click results package: results.txt (round-by-round narrative),
+    results.csv (stage matrix), results.json (machine-readable), a printable
+    results.html, every contest's .blt (+ alternates recounts), ballots.csv,
+    and verification instructions. ?anonymize=1 strips member identity from
+    ballots.csv (receipts + hashes stay, so self-verification still works).
+    Same gate as results: finalized, or national + ?live=1 (audited)."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    if not cfg.get("finalized"):
+        if not (request.args.get("live") and ident["role"] == "national"):
+            return jsonify({"error": "not_finalized"}), 409
+        _audit(poll_id, "live_export_zip", ident["name"])
+    anonymize = str(request.args.get("anonymize", "")).lower() in ("1", "true", "yes")
+    res = compute_results(poll_id, cfg)
+    main_rows, _, secret_rows = _tally_rows(poll_id)
+
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("results.txt", _results_txt(res))
+        z.writestr("results.csv", _results_csv(res))
+        z.writestr("results.json", json.dumps(res, indent=2))
+        z.writestr("VERIFY_README.txt", VERIFY_README)
+        # printable report (open in a browser, print to PDF)
+        body = "<pre style='font: 13px/1.45 ui-monospace,Menlo,monospace'>" \
+               + _esc(_results_txt(res)) + "</pre>"
+        z.writestr("results.html",
+                   f"<!doctype html><meta charset='utf-8'><title>{_esc(res.get('name') or poll_id)}"
+                   f" — results</title>{body}")
+        for q in poll_questions(cfg):
+            if q["type"] not in ("ranked", "yesno"):
+                continue
+            key = q["key"]
+            if q["type"] == "yesno":
+                options = _yesno_options(dict(q, allow_abstain=False))
+                rows = [({key: [str(a.get(key)).upper()]}, w) for a, w in main_rows
+                        if str(a.get(key, "")).upper() in ("YES", "NO")]
+                seats = 1
+            else:
+                options = q["options"]
+                seats = int(q.get("seats", 1))
+                rows = secret_rows if q.get("secret") else main_rows
+            title = f"{cfg.get('name', poll_id)} - {q['title']}"
+            z.writestr(f"{key}.blt", _blt_text(rows, key, options, seats, title=title))
+            alts = int(q.get("alternates", 0)) if q["type"] == "ranked" else 0
+            if alts:
+                z.writestr(f"{key}_alternates_recount.blt",
+                           _blt_text(rows, key, options, seats + alts,
+                                     title=title + " - ALTERNATES RECOUNT"))
+        # ballot records (never includes secret-question content)
+        lines = ["receipt,record_hash,voided,provisional,weight"
+                 + ("" if anonymize else ",member_id,chapter")]
+        weights = _code_weights(poll_id)
+        for snap in db.collection(f"{poll_id}__ballots").stream():
+            d = snap.to_dict() or {}
+            row = [d.get("receipt", ""), d.get("record_hash", ""),
+                   str(bool(d.get("voided"))), str(bool(d.get("provisional"))),
+                   str(_ballot_weight(d, weights))]
+            if not anonymize:
+                row += [str(d.get("member_id") or ""),
+                        '"' + str(d.get("chapter") or "").replace('"', '""') + '"']
+            lines.append(",".join(row))
+        z.writestr("ballots.csv", "\n".join(lines) + "\n")
+    buf.seek(0)
+    _audit(poll_id, "export_zip", ident["name"], anonymize=anonymize)
+    return Response(buf.read(), mimetype="application/zip",
+                    headers={"Content-Disposition":
+                             f"attachment; filename={poll_id}_results.zip"})
 
 
 @app.post("/admin/api/polls/<poll_id>/voters/weight")
@@ -2337,6 +2518,91 @@ def admin_void(poll_id):
     })
     # plaintext code returned ONCE for delivery to the voter; only its hash is stored
     return jsonify({"ok": True, "receipt_voided": receipt, "new_code": new_code}), 200
+
+
+_LEGAL_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>{title} — DSA Vote</title>
+<style>body{{font:16px/1.55 Georgia,serif;background:#fff5e5;color:#111;margin:0}}
+main{{max-width:640px;margin:0 auto;padding:24px 18px 60px}}
+h1{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase}}h2{{font-size:1.05rem}}
+.banner{{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;
+font-weight:bold;text-transform:uppercase}} .draft{{background:#ffe1b2;border:1px solid #000;
+padding:8px 12px;font-size:.85rem}} a{{color:#dd1111}}</style></head><body>
+<div class="banner">DSA Vote 🌹</div><main><h1>{title}</h1>
+<p class="draft">DRAFT — prototype language pending review by DSA staff and counsel.
+This service is a prototype and not a live election unless explicitly announced.</p>
+{body}<p><a href="/">&larr; Back to DSA Vote</a></p></main></body></html>"""
+
+TERMS_BODY = """
+<h2>What this service is</h2>
+<p>DSA Vote is election infrastructure operated by the Democratic Socialists of
+America's staff for chapter and national votes: ballots, voter codes,
+tabulation, and results. Using a voting code, casting a ballot, or
+administering an election here means you accept these terms.</p>
+<h2>Acceptable use</h2>
+<p>One member, one ballot (at the member's assigned voting weight). You may not
+use a voting code that was not issued to you, attempt to vote more than once,
+probe or disrupt the service, or attempt to access another member's ballot or
+an administrative surface you were not granted. Test codes and the demo
+sandbox exist for experimentation — use those.</p>
+<h2>Votes are final</h2>
+<p>Cast ballots cannot be edited or revoted. The only remedy is an
+administrator's audited void-and-reissue under pre-committed reasons. Election
+schedules, eligibility, and rules are set by the body running the election —
+this service enforces them but does not decide them.</p>
+<h2>No warranty</h2>
+<p>The service is provided as-is, without warranty of any kind. Nothing here is
+a guarantee of uninterrupted availability. Results are official only when
+certified by the body conducting the election.</p>
+<h2>Changes</h2>
+<p>These terms may change; material changes will be posted on this page with
+the service's version history.</p>
+"""
+
+PRIVACY_BODY = """
+<h2>What we collect</h2>
+<p><b>Voters:</b> your ballot answers, a receipt code, timestamps, and — for
+named sections — your member ID and chapter, exactly as disclosed on the
+ballot above Question 1. Secret-ballot questions (such as convention
+delegates) are stored with no name and no chapter. Voting codes are stored
+only as SHA-256 hashes. Provisional ballots additionally hold the contact
+details you provide, sealed until adjudication.</p>
+<h2>Who can see what</h2>
+<p>Named answers: election administrators and your own chapter's admins.
+Secret-ballot rankings: no one by name — administrators can only trace a
+specific record for troubleshooting, under audit. National does not publish a
+chapter's results; each chapter decides its own publication (never
+secret-ballot rankings). Every administrative action is written to an
+append-only audit log.</p>
+<h2>What we don't do</h2>
+<p>We do not sell or share member data, run ads, use tracking pixels or
+third-party analytics, or send messages from this service. Election reminders
+go through DSA's existing communication platforms.</p>
+<h2>Where data lives</h2>
+<p>Data is stored in Google Cloud (Firestore, in DSA's own project) and
+processed only to run the election: eligibility, one-member-one-vote,
+tabulation, auditing, and the tamper-evidence chain. Ballot records are
+retained as the permanent election record; voided ballots are flagged, never
+deleted.</p>
+<h2>Verification</h2>
+<p>Your receipt code lets you confirm your ballot was stored
+(<code>/p/&lt;poll&gt;/verify</code>) without revealing content. Exported
+ballot files are anonymous.</p>
+<h2>Contact</h2>
+<p>Questions or concerns: orgtools@dsausa.org.</p>
+"""
+
+
+@app.get("/terms")
+def terms_page():
+    return Response(_LEGAL_SHELL.format(title="Terms of Use", body=TERMS_BODY),
+                    mimetype="text/html")
+
+
+@app.get("/privacy")
+def privacy_page():
+    return Response(_LEGAL_SHELL.format(title="Privacy Policy", body=PRIVACY_BODY),
+                    mimetype="text/html")
 
 
 @app.get("/healthz")

@@ -1,3 +1,8 @@
 .venv/
 __pycache__/
 .DS_Store
+codes_out*/
+*_code_manifest*.csv
+distribution_manifest.csv
+contact_index_private.csv
+*_results.zip

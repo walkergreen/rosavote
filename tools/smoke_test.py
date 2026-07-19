@@ -564,4 +564,33 @@ ok(c.post("/admin/api/count_blt", headers=demo_hdr,
 ok(c.post("/admin/api/count_blt", json={"blt": blt_sample}).status_code == 403,
    "count workbench requires a signed-in admin")
 
+# ---- export zip, dropout recount, terms/privacy, branding ----
+import io as _io  # noqa: E402
+import zipfile as _zipfile  # noqa: E402
+
+r = c.get("/admin/api/polls/special_ref/export.zip?live=1&anonymize=1", headers=hdr)
+ok(r.status_code == 200, "results zip exports")
+zf = _zipfile.ZipFile(_io.BytesIO(r.data))
+names = set(zf.namelist())
+ok({"results.txt", "results.csv", "results.json", "results.html",
+    "VERIFY_README.txt", "ballots.csv", "officer.blt", "measure.blt"} <= names,
+   "zip contains txt/csv/json/html reports, BLTs, ballots, verify readme")
+ok("member_id" not in zf.read("ballots.csv").decode(), "anonymize strips identity")
+ok("Stage" in zf.read("results.txt").decode(), "txt report carries round-by-round")
+r = c.get("/admin/api/polls/special_ref/export.zip?live=1", headers=hdr)
+ok("member_id" in _zipfile.ZipFile(_io.BytesIO(r.data)).read("ballots.csv").decode(),
+   "non-anonymized export keeps identity columns")
+
+r = c.get("/admin/api/polls/special_ref/blt/officer?live=1&withdraw=A1", headers=hdr)
+ok(r.status_code == 200 and "\n-1\n" in r.get_data(as_text=True),
+   "dropout recount BLT carries the withdrawn line")
+
+ok("Terms of Use" in c.get("/terms").data.decode(), "terms page served")
+ok("Privacy Policy" in c.get("/privacy").data.decode(), "privacy page served")
+sp2 = c.get("/").data.decode()
+ok("DSA Vote" in sp2 and "Built with 🌹 by Walker Green" in sp2, "splash rebranded")
+ok("value {" not in "".join(  # narrative strings render with transfer values
+    st["action"] for q in res.values() if isinstance(q, dict) and q.get("stages")
+    for st in q["stages"]), "stage actions well-formed")
+
 print(f"SMOKE TEST: all {passed} checks passed")

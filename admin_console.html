@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Ballot Admin Console — DSA</title>
+<title>Admin Console — DSA Vote</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -66,8 +66,8 @@
   footer b{color:var(--dsa)}
 </style></head><body>
 <header class="band"><div class="band-in">
-  <div class="wm">Admin Console<small>DSA Chapter Member Ballot</small></div>
-  <a class="rose" href="/">DSA<br/>Vote</a>
+  <div class="wm">Admin Console<small>DSA Vote 🌹</small></div>
+  <a class="rose" href="/" style="font-size:1.3rem;line-height:1;">🌹</a>
 </div></header>
 <main>
   <div class="marks"></div>
@@ -109,6 +109,7 @@
       <button class="tab" data-pane="builder-pane">Election Builder</button>
       <button class="tab" data-pane="voters-pane">Voters</button>
       <button class="tab" data-pane="results-pane">Results</button>
+      <button class="tab" data-pane="count-pane">Count</button>
       <button class="tab" data-pane="prov-pane">Provisionals</button>
       <button class="tab" data-pane="void-pane">Void &amp; Reissue</button>
     </div>
@@ -116,6 +117,7 @@
     <div class="card" id="polls-pane">
       <div class="card-band">Polls<span>
         <button class="btn ghost sm" id="new-election-btn">＋ Create election</button>
+        <button class="btn ghost sm" id="new-count-btn" style="margin-left:6px">＋ Create count</button>
         <button class="btn ghost sm" id="refresh-btn" style="margin-left:6px">Refresh</button></span></div>
       <div class="card-body" id="polls-list"><p>Loading…</p></div>
     </div>
@@ -190,8 +192,18 @@
         <input type="text" id="b-pid" placeholder="spring_referendum__nyc"/>
         <label>Chapter / election display name</label>
         <input type="text" id="b-name"/>
-        <label>Timezone (IANA — windows below are entered in this timezone)</label>
-        <input type="text" id="b-tz" value="America/New_York" placeholder="America/Chicago"/>
+        <label>Timezone (windows below are entered in this timezone)</label>
+        <select id="b-tz">
+          <option value="America/New_York">Eastern — America/New_York</option>
+          <option value="America/Chicago">Central — America/Chicago</option>
+          <option value="America/Denver">Mountain — America/Denver</option>
+          <option value="America/Phoenix">Arizona — America/Phoenix</option>
+          <option value="America/Los_Angeles">Pacific — America/Los_Angeles</option>
+          <option value="America/Anchorage">Alaska — America/Anchorage</option>
+          <option value="Pacific/Honolulu">Hawaii — Pacific/Honolulu</option>
+          <option value="America/Puerto_Rico">Puerto Rico — America/Puerto_Rico</option>
+          <option value="UTC">UTC</option>
+        </select>
         <div class="row">
           <div><label>Opens at (poll-local)</label><input type="datetime-local" id="b-opens"/></div>
           <div><label>Closes at (poll-local)</label><input type="datetime-local" id="b-closes"/></div>
@@ -244,10 +256,14 @@
         <div id="results-msg"></div>
         <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
         <p class="kicker">Ballots — export &amp; independent verification</p>
-        <p>Download each contest as a standard <b>.blt</b> file (ballot weights
+        <p>Download each contest as a standard <b>.blt</b> file
+        <a href="#" class="blt-info" title="What is a BLT file?">ℹ️</a> (ballot weights
         included) and reproduce the result in software we don't control:</p>
         <div id="blt-list"><p><small>Pick a poll above, then</small></p></div>
-        <button class="btn dark sm" id="blt-refresh">List ballot files</button>
+        <div class="row">
+          <button class="btn dark sm" id="blt-refresh" style="margin-top:0">List ballot files</button>
+          <button class="btn sm" id="export-zip-btn">Download results .zip</button>
+        </div>
         <details class="vk-how" style="margin-top:12px;border:1px solid rgba(0,0,0,.25);background:var(--cream);font-size:.82rem">
           <summary style="cursor:pointer;padding:9px 11px;font-weight:700;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dsa)">How to independently verify results</summary>
           <div style="padding:0 12px 12px;line-height:1.5">
@@ -278,20 +294,58 @@
             every weight change is in the audit log.</p>
           </div>
         </details>
-        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
-        <p class="kicker">Manual count workbench</p>
-        <p>Load any <b>.blt</b> file (e.g. one downloaded above, or from another
-        system), run a Scottish STV count, and see the same round-by-round
-        chart. The ballot text is editable — tweak ballots, weights, or the
-        seat count in the header and <b>rerun</b> to explore how the outcome
-        responds. Nothing here touches stored election data.</p>
+      </div>
+    </div>
+
+    <div class="card hide" id="count-pane">
+      <div class="card-band">Count Workbench</div>
+      <div class="card-body">
+        <p>Load any <b>.blt</b> file <a href="#" class="blt-info" title="What is a BLT file?">ℹ️</a>
+        (e.g. one exported from the Results tab, or
+        from another system), run a Scottish STV count, and see the same
+        round-by-round chart. The ballot text is editable — tweak ballots,
+        weights, or the seat count in the header and <b>rerun</b> to explore how
+        the outcome responds. Nothing here touches stored election data.</p>
         <input type="file" id="count-file" accept=".blt,.txt,text/plain"/>
         <label style="margin-top:10px">BLT text (editable — header: <code>candidates seats</code>;
         ballots: <code>weight rank1 rank2 … 0</code>; then <code>0</code>, quoted names, quoted title)</label>
-        <textarea id="count-blt" style="min-height:160px" placeholder="4 2&#10;1 1 2 0&#10;1 2 0&#10;0&#10;&quot;Ana Reyes&quot;&#10;&quot;Ben Katz&quot;&#10;&quot;Cora Lee&quot;&#10;&quot;Dev Malik&quot;&#10;&quot;My contest&quot;"></textarea>
+        <textarea id="count-blt" style="min-height:200px" placeholder="4 2&#10;1 1 2 0&#10;1 2 0&#10;0&#10;&quot;Ana Reyes&quot;&#10;&quot;Ben Katz&quot;&#10;&quot;Cora Lee&quot;&#10;&quot;Dev Malik&quot;&#10;&quot;My contest&quot;"></textarea>
         <button class="btn sm" id="count-run" style="margin-top:10px">Run count</button>
         <div id="count-view" style="margin-top:10px"></div>
         <div id="count-msg"></div>
+        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+        <div id="blt-format">
+        <p class="kicker">The BLT ballot file format</p>
+        <p style="font-size:.85rem">DSA Vote reads and writes the standard BLT format
+        (also used by OpaVote and OpenSTV), so ballots move freely between systems:</p>
+        <ul style="font-size:.82rem;line-height:1.5;padding-left:18px;margin:0 0 10px">
+          <li><b>Line 1:</b> two numbers — how many candidates, how many seats.</li>
+          <li><b>Optional line 2:</b> negative numbers mark <b>withdrawn</b> candidates
+            (<code>-2</code> = candidate 2 dropped out; their rankings are skipped). This is
+            how dropout recounts work.</li>
+          <li><b>Ballot lines:</b> first number is the <b>ballot weight</b> (1 unless the
+            voter has a weighted vote, or ballots are packed so identical ballots share a
+            line), then candidate numbers in ranked order, ending with <code>0</code>.
+            <code>1 0</code> is an empty/abstain ballot. A <code>-</code> is a skipped
+            ranking; <code>3=2</code> is an overvote (two candidates at one rank) — counting
+            rules skip past both.</li>
+          <li><b>A lone <code>0</code></b> ends the ballots.</li>
+          <li>Then each candidate's name in straight double quotes (one per line, in
+            candidate-number order), and finally the contest title in quotes.</li>
+          <li>Blank lines, extra spaces, and <code>#</code> comments are ignored.</li>
+        </ul>
+        <pre style="font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--cream);border:1px solid rgba(0,0,0,.25);padding:10px;overflow-x:auto">4 2          # 4 candidates, 2 seats
+-2           # candidate 2 withdrew
+1 4 1 3 0    # Amy 1st, Diane 2nd, Chuck 3rd
+6 4 3 0      # Amy 1st, Chuck 2nd — weight 6
+1 0          # empty ballot
+0            # end of ballots
+"Diane"
+"Bob"
+"Chuck"
+"Amy"
+"Demo Election"</pre>
+        </div>
       </div>
     </div>
 
@@ -334,7 +388,7 @@
 
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>Democratic Socialists of America</b> &middot; Chapter Member Ballot &middot; Admin Console<br/>Built by DSA Staff&rsquo;s Data &amp; Tech Department</footer>
+<footer><b>DSA Vote</b> &middot; Admin Console &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Built with 🌹 by Walker Green</footer>
 <script>
 "use strict";
 var TOKEN = sessionStorage.getItem("admin_token") || "";
@@ -372,6 +426,7 @@ function tsToNaive(ts, tz){   // unix -> "YYYY-MM-DDTHH:MM" in the POLL's timezo
 function boot(){
   api("/admin/api/whoami").then(function(r){
     if(r.status !== 200){ sessionStorage.removeItem("admin_token"); return; }
+    window.IDENT = r.body;
     $("login-card").classList.add("hide");
     $("console").classList.remove("hide");
     $("whoami-line").innerHTML = "<b>"+esc(r.body.name)+"</b> &middot; "+esc(r.body.role)+
@@ -402,7 +457,7 @@ $("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); 
 $("demo-btn").onclick = function(){ $("tok").value = "DEMO-ADMIN-TOKEN-2026"; $("login-btn").onclick(); };
 
 // ---- tabs ----
-var PANES = ["polls-pane","builder-pane","voters-pane","results-pane","prov-pane","void-pane"];
+var PANES = ["polls-pane","builder-pane","voters-pane","results-pane","count-pane","prov-pane","void-pane"];
 Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){
   t.onclick = function(){
     Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(x){ x.classList.remove("on"); });
@@ -426,6 +481,30 @@ function loadPolls(){
         "<code>"+esc(pid)+"</code><br/><small>opens "+esc(fmtTs(c.opens_at, c.timezone))+" &middot; closes "+esc(fmtTs(c.closes_at, c.timezone))+
         " &middot; "+esc(c.timezone||"America/New_York")+"</small></div>";
       var btns = document.createElement("div");
+      if(window.IDENT && window.IDENT.role==="national" && c.state==="not_open"){
+        var st = document.createElement("button"); st.className="btn sm"; st.textContent="Start now";
+        st.style.marginRight="6px";
+        st.onclick = function(){
+          if(!confirm("Open voting for "+c.name+" NOW (overriding the scheduled open)?")) return;
+          api("/admin/api/polls/"+pid, {method:"POST",
+              body: JSON.stringify(cfgBody(pid, {opens_at: Math.floor(Date.now()/1000)-5}))}).then(function(r2){
+            if(r2.status===200) loadPolls(); else alert("Start failed: "+JSON.stringify(r2.body));
+          });
+        };
+        btns.appendChild(st);
+      }
+      if(window.IDENT && window.IDENT.role==="national" && c.state==="closed"){
+        var ro = document.createElement("button"); ro.className="btn sm"; ro.textContent="Reopen";
+        ro.style.marginRight="6px";
+        ro.onclick = function(){
+          if(!confirm("REOPEN "+c.name+"? The close time is cleared"+(c.finalized?" and the finalized certification is deliberately lifted (audited)":"")+".")) return;
+          api("/admin/api/polls/"+pid, {method:"POST",
+              body: JSON.stringify(cfgBody(pid, {closes_at: null, unfinalize: true}))}).then(function(r2){
+            if(r2.status===200) loadPolls(); else alert("Reopen failed: "+JSON.stringify(r2.body));
+          });
+        };
+        btns.appendChild(ro);
+      }
       var edit = document.createElement("button"); edit.className="btn ghost sm"; edit.textContent="Edit";
       edit.onclick = function(){ fillBuilder(pid, c); };
       var close = document.createElement("button"); close.className="btn dark sm"; close.style.marginLeft="6px"; close.textContent="Close now";
@@ -463,13 +542,21 @@ $("new-election-btn").onclick = function(){
   syncArt5();
   $("b-pid").focus();
 };
+$("new-count-btn").onclick = function(){
+  document.querySelector('[data-pane="count-pane"]').click();
+  $("count-blt").focus();
+};
 
 // ---- builder ----
 var editingLegacy = null;   // legacy q6/q8/q7 of the poll being edited (passthrough)
 function fillBuilder(pid, c){
   document.querySelector('[data-pane="builder-pane"]').click();
   $("b-pid").value = pid; $("b-name").value = c.name || "";
-  $("b-tz").value = c.timezone || "America/New_York";
+  var tzv = c.timezone || "America/New_York";
+  if(!Array.prototype.some.call($("b-tz").options, function(o){ return o.value===tzv; })){
+    var op = document.createElement("option"); op.value=tzv; op.textContent=tzv; $("b-tz").appendChild(op);
+  }
+  $("b-tz").value = tzv;
   $("b-opens").value = tsToNaive(c.opens_at, $("b-tz").value);
   $("b-closes").value = tsToNaive(c.closes_at, $("b-tz").value);
   $("b-conv").value = c.convention_date || ""; $("b-app").checked = !!c.apportionment_done;
@@ -659,6 +746,10 @@ function loadResults(live){
   msg("results-msg","warn","Counting…");
   api("/admin/api/polls/"+pid+"/results"+(live?"?live=1":"")).then(function(r){
     if(r.status!==200){
+      if(r.status===409 && !live && window.IDENT && window.IDENT.role==="national"){
+        msg("results-msg","warn","Not finalized yet — showing the LIVE tally instead (audited).");
+        return loadResults(true);
+      }
       $("results-view").innerHTML = "";
       msg("results-msg", r.status===409?"warn":"err",
           (r.body.message||JSON.stringify(r.body)));
@@ -716,7 +807,13 @@ function stvChart(q){
     "<i class='f-muted'></i>✗ excluded / non-transferable · <b>|</b> quota "+q.quota+"</div>";
   stages.forEach(function(st, si){
     var prev = si ? stages[si-1] : null;
-    html += "<div class='stagecard'><p class='stagehead'>Stage "+st.stage+" · "+esc(st.action)+"</p>";
+    var prevElected = prev ? (prev.elected_so_far||[]) : [];
+    var newly = (st.elected_so_far||[]).filter(function(n){ return prevElected.indexOf(n)===-1; });
+    html += "<div class='stagecard'><p class='stagehead'>Stage "+st.stage+"</p>"+
+      "<p style='font-size:.8rem;margin:0 0 6px'>"+esc(st.action)+"."+
+      (newly.length ? " <b>"+esc(newly.join(", "))+" reached the quota of "+q.quota+" and "+(newly.length===1?"is":"are")+" elected.</b>" : "")+
+      (prev && st.nontransferable>prev.nontransferable ? " <small>"+(Math.round((st.nontransferable-prev.nontransferable)*100)/100)+" votes became non-transferable.</small>" : "")+
+      "</p>";
     order.forEach(function(cand){
       var v = st.totals[cand];
       var status = st.status[cand];
@@ -749,6 +846,37 @@ function stvChart(q){
 $("results-load").onclick = function(){ loadResults(false); };
 $("results-live").onclick = function(){ loadResults(true); };
 
+function cfgBody(pid, overrides){
+  var c = POLLS[pid];
+  var body = {name: c.name, timezone: c.timezone || "America/New_York",
+    test_code: c.test_code || "", opens_at: c.opens_at || null, closes_at: c.closes_at || null,
+    convention_date: c.convention_date || null, apportionment_done: !!c.apportionment_done};
+  if(c.questions) body.questions = c.questions;
+  else { body.q6 = c.q6; body.q8 = c.q8; body.q7 = c.q7; }
+  return Object.assign(body, overrides || {});
+}
+Array.prototype.forEach.call(document.querySelectorAll(".blt-info"), function(a){
+  a.onclick = function(e){
+    e.preventDefault();
+    document.querySelector('[data-pane="count-pane"]').click();
+    document.getElementById("blt-format").scrollIntoView({block:"start"});
+  };
+});
+function downloadZip(pid){
+  var anon = confirm("Anonymize ballots.csv?\nOK = strip member IDs (receipts + hashes stay)\nCancel = include member IDs (identity-linked, per policy)");
+  var qs = ["anonymize=" + (anon ? 1 : 0)];
+  if(!POLLS[pid].finalized) qs.push("live=1");
+  msg("results-msg","warn","Building the results package…");
+  fetch("/admin/api/polls/"+pid+"/export.zip?"+qs.join("&"), {headers:{"X-Admin-Token":TOKEN}})
+    .then(function(r){ if(r.status!==200) throw r.status; return r.blob(); })
+    .then(function(b){
+      var a = document.createElement("a"); a.href = URL.createObjectURL(b);
+      a.download = pid+"_results.zip"; a.click(); URL.revokeObjectURL(a.href);
+      msg("results-msg","okc","Results package downloaded: results.txt / .csv / .json, printable results.html (print to PDF), every contest .blt, ballots.csv"+(anon?" (anonymized)":"")+", and verification instructions.");
+    })
+    .catch(function(s){ msg("results-msg","err","Export failed"+(s===409?" — results are locked until finalize (root can use live views)":"")+"."); });
+}
+
 // ---- BLT export ----
 function downloadBlt(pid, key, recount){
   var qs = [];
@@ -763,6 +891,7 @@ function downloadBlt(pid, key, recount){
     } else msg("results-msg","err","Export failed: "+(r.body&&r.body.message||r.body&&r.body.error||r.status));
   });
 }
+$("export-zip-btn").onclick = function(){ downloadZip($("results-poll").value); };
 $("blt-refresh").onclick = function(){
   var pid = $("results-poll").value, c = POLLS[pid];
   var el = $("blt-list");
@@ -786,6 +915,27 @@ $("blt-refresh").onclick = function(){
       b2.textContent = "Alternates recount .blt";
       b2.onclick = function(){ downloadBlt(pid, q.key, true); };
       btns.appendChild(b2);
+    }
+    if(q.type==="ranked"){
+      var b3 = document.createElement("button"); b3.className="btn dark sm"; b3.style.marginLeft="6px";
+      b3.textContent = "Dropout recount";
+      b3.onclick = function(){
+        var menu = q.options.map(function(o,i){ return (i+1)+" = "+o.name; }).join("\n");
+        var pick = prompt("A candidate dropped out during/after the race?\nEnter the number(s) to WITHDRAW (comma-separated) — their ballots transfer to each voter's next choice:\n\n"+menu, "");
+        if(pick===null) return;
+        var ids = pick.split(",").map(function(s){ var n=parseInt(s.trim(),10); return q.options[n-1] && q.options[n-1].id; }).filter(Boolean);
+        if(!ids.length){ alert("No valid candidate numbers."); return; }
+        var qs = ["withdraw="+encodeURIComponent(ids.join(","))];
+        if(!POLLS[pid].finalized) qs.push("live=1");
+        api("/admin/api/polls/"+pid+"/blt/"+q.key+"?"+qs.join("&")).then(function(r){
+          if(!r.raw){ msg("results-msg","err","Could not fetch ballots for the recount."); return; }
+          document.querySelector('[data-pane="count-pane"]').click();
+          $("count-blt").value = r.raw;
+          $("count-run").onclick();
+          window.scrollTo(0,0);
+        });
+      };
+      btns.appendChild(b3);
     }
     row.appendChild(btns); el.appendChild(row);
   });
