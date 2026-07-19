@@ -983,7 +983,58 @@ SPLASH = """<!doctype html><html lang="en"><head>
   details .dbody b{color:var(--dsa)}
   footer{font-family:var(--ui);font-size:.68rem;color:rgba(0,0,0,.55);text-align:center;padding:14px 16px 22px;line-height:1.5}
   footer b{color:var(--dsa)}
+  /* ---- animated intro ---- */
+  #intro{position:fixed;inset:0;z-index:100;background:var(--cream);display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    animation:intro-out .7s ease 2.5s forwards}
+  #intro svg{width:min(46vw,180px);height:auto;overflow:visible}
+  #intro .wordmark{font-family:var(--disp);font-weight:900;text-transform:uppercase;
+    font-size:clamp(2.4rem,11vw,4rem);color:var(--dsa);line-height:.9;letter-spacing:.01em;
+    opacity:0;animation:word-in .6s ease 1.5s forwards}
+  #intro .tagline{font-family:var(--ui);font-weight:700;font-size:.8rem;letter-spacing:.14em;
+    text-transform:uppercase;color:rgba(0,0,0,.55);opacity:0;animation:word-in .6s ease 1.9s forwards}
+  /* box drops in, then stem draws up, leaves pop, bloom unfurls */
+  .an-box{transform-origin:29px 45px;transform:translateY(-6px) scale(.4);opacity:0;
+    animation:box-in .5s cubic-bezier(.34,1.56,.64,1) .15s forwards}
+  .an-slot{opacity:0;animation:fade-in .3s ease .5s forwards}
+  .an-stem{stroke-dasharray:16;stroke-dashoffset:16;animation:draw .5s ease .6s forwards}
+  .an-leaf{transform-origin:29px 32px;transform:scale(0);animation:pop .35s cubic-bezier(.34,1.56,.64,1) forwards}
+  .an-leaf.l2{animation-delay:1s}.an-leaf.l1{animation-delay:1.1s}
+  .an-bloom{transform-origin:29px 16px;transform:scale(0) rotate(-40deg);opacity:0;
+    animation:bloom 1s cubic-bezier(.34,1.56,.64,1) 1.15s forwards}
+  @keyframes box-in{to{transform:translateY(0) scale(1);opacity:1}}
+  @keyframes fade-in{to{opacity:1}}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  @keyframes pop{to{transform:scale(1)}}
+  @keyframes bloom{to{transform:scale(1) rotate(0);opacity:1}}
+  @keyframes word-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes intro-out{to{opacity:0;visibility:hidden}}
+  #intro.hide{display:none}
+  @media (prefers-reduced-motion:reduce){
+    #intro{animation:intro-out .3s ease 1s forwards}
+    #intro *{animation-duration:.01s!important;animation-delay:0s!important;opacity:1!important;
+      transform:none!important;stroke-dashoffset:0!important}
+  }
 </style></head><body>
+<div id="intro" aria-hidden="true">
+  <svg viewBox="0 0 58 58" role="img" aria-label="RosaVote">
+    <g class="an-bloom">
+      <circle cx="29" cy="16.5" r="8" fill="#dd1111" stroke="#000" stroke-width="2.2"/>
+      <path d="M29 12 c 2.7 0 4.5 1.8 4.5 4 0 2.4-2 4.2-4.5 4.2 s-4.5-1.8-4.5-4.2" fill="none" stroke="#fff5e5" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M29 14.8 c 1.1 0 1.9.7 1.9 1.7" fill="none" stroke="#fff5e5" stroke-width="1.4" stroke-linecap="round"/>
+    </g>
+    <path class="an-stem" d="M29 24.5 V 38.5" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/>
+    <path class="an-leaf l1" d="M28 30.5 C 25 30 22.8 28.3 22 25.7 C 25.2 26.1 27.4 27.8 28 30.5 z" fill="#dd1111" stroke="#000" stroke-width="1.6"/>
+    <path class="an-leaf l2" d="M30 34.5 C 33 34 35.2 32.3 36 29.7 C 32.8 30.1 30.6 31.8 30 34.5 z" fill="#dd1111" stroke="#000" stroke-width="1.6"/>
+    <g class="an-box">
+      <rect x="20" y="37.5" width="18" height="4" fill="#000"/>
+      <rect x="14" y="39" width="30" height="11.5" fill="#dd1111" stroke="#000" stroke-width="2.2"/>
+      <path class="an-slot" d="M18.5 45 h 21" stroke="#fff5e5" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </svg>
+  <div class="wordmark">RosaVote</div>
+  <div class="tagline">Democratic Socialists of America</div>
+</div>
 <header class="band"><div class="band-in">
   <div class="wm">RosaVote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
   <a class="rose" href="/" aria-label="RosaVote home"><img src="/logo.svg" alt="" width="34" height="34"/></a>
@@ -1343,6 +1394,18 @@ SPLASH = """<!doctype html><html lang="en"><head>
   <div class="marks" style="margin-top:18px"></div>
 </main>
 <footer><b>RosaVote</b> &middot; Prototype build &mdash; not a live election &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<script>
+(function(){
+  var intro = document.getElementById("intro");
+  if(!intro) return;
+  // once per browser session: skip the animation on repeat visits
+  try{ if(sessionStorage.getItem("rv_intro")){ intro.classList.add("hide"); return; }
+       sessionStorage.setItem("rv_intro","1"); }catch(e){}
+  // let anyone tap through it, and hard-remove after it finishes
+  intro.addEventListener("click", function(){ intro.classList.add("hide"); });
+  setTimeout(function(){ intro.classList.add("hide"); }, 3600);
+})();
+</script>
 </body></html>"""
 
 
