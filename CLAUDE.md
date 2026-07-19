@@ -135,6 +135,20 @@ regardless of window and refuse builder edits without an explicit
   national|chapter, polls: [...], active}`. `ADMIN_TOKEN` env stays as the
   national break-glass; if unset AND no docs exist, admin surface is off.
 
+## Vote weights
+
+Per-voter integer ballot weights (1–1000, default 1) live on the CODE docs:
+provisioned via any import (optional `weight` column/field), edited any time
+via `POST /admin/api/polls/<pid>/voters/weight` (national-only, audited) or
+the Voters tab. Tallies resolve the CURRENT weight at count time — edits
+before/during/after the election reflow live + final results and the
+exported BLTs (weights ride the BLT weight column, so independent
+tabulators reproduce weighted outcomes). Promoted provisionals stamp their
+weight on the ballot doc (adjudicator can pass `weight` on verify).
+BLT export: `GET /admin/api/polls/<pid>/blt/<qkey>[?recount=1][&live=1]`
+(same gating as results); console Results tab has downloads + independent-
+verification instructions.
+
 ## Decided policy (do not silently change)
 
 - Visibility: Sections 1&3 recorded by name (admin + own chapter); delegate

@@ -475,4 +475,63 @@ ok(res["why"]["responses"] == 1, "text answers counted, not displayed")
 ok(c.get("/admin/api/polls/special_ref/results", headers=chi_hdr).status_code == 403,
    "results scoped to chapter tokens' own polls")
 
+# ---- vote weights: provisioned at import, editable any time, tally + BLT --
+# reopen the finalized special_ref deliberately (audited) to vote again
+r = c.post("/admin/api/polls/special_ref", headers=hdr, json={
+    "name": "Special Referendum", "timezone": "America/Chicago",
+    "opens_at": "2020-01-01T00:00", "closes_at": "2099-01-01T00:00",
+    "questions": CUSTOM_QS, "unfinalize": True})
+ok(r.status_code == 200, "deliberate unfinalize reopens for weight tests")
+r = c.post("/admin/api/polls/special_ref/voters/import", headers=hdr,
+           json={"members": [{"member_id": "AKW1", "weight": 5}]})
+ok(r.status_code == 200 and r.get_json()["created"][0]["weight"] == 5,
+   "import provisions per-voter weight")
+wcode = r.get_json()["created"][0]["code"]
+ok(DOCS[("special_ref__codes", vote_service.code_hash(wcode))]["weight"] == 5,
+   "weight stored on the code doc")
+ok(c.post("/admin/api/polls/special_ref/voters/weight", headers=hdr,
+          json={"member_id": "AKW1", "weight": 3}).status_code == 200,
+   "weight editable on the backend")
+ok(DOCS[("special_ref__codes", vote_service.code_hash(wcode))]["weight"] == 3,
+   "weight update lands on the code doc")
+ok(c.post("/admin/api/polls/special_ref/voters/weight", headers=chi_hdr,
+          json={"member_id": "AKW1", "weight": 2}).status_code == 403,
+   "weight edits are national-only")
+ok(c.post("/admin/api/polls/special_ref/voters/weight", headers=hdr,
+          json={"member_id": "AKW1", "weight": 0}).status_code == 400,
+   "weight bounds enforced")
+ok(any(d.get("action") == "weight_set"
+       for (coll, k), d in DOCS.items() if coll == "special_ref__audit_log"),
+   "weight changes audited")
+
+# the weighted voter votes NO; weight 3 flips the earlier 1-1 measure tie
+r = c.post("/p/special_ref/vote", json={"code": wcode, "answers": {
+    "measure": "NO", "officer": ["C3"], "why": ""}})
+ok(r.status_code == 200, "weighted voter's ballot accepted")
+DOCS[("special_ref__codes", vote_service.code_hash(wcode))]["used"] = True
+r = c.get("/admin/api/polls/special_ref/results?live=1", headers=hdr)
+res = {q["key"]: q for q in r.get_json()["questions"]}
+ok(res["measure"]["counts"] == {"YES": 1, "NO": 4, "ABSTAIN": 0}
+   and res["measure"]["result"] == "FAILS" and r.get_json()["weighted"],
+   "weighted tally: x3 NO vote flips the result")
+# adjust weight AFTER voting — tally follows the current weight
+c.post("/admin/api/polls/special_ref/voters/weight", headers=hdr,
+       json={"member_id": "AKW1", "weight": 1})
+r = c.get("/admin/api/polls/special_ref/results?live=1", headers=hdr)
+res = {q["key"]: q for q in r.get_json()["questions"]}
+ok(res["measure"]["counts"]["NO"] == 2, "post-election weight edit reflows the tally")
+
+# BLT export: standard file, weights carried, scoped, recount variant
+r = c.get("/admin/api/polls/special_ref/blt/officer?live=1", headers=hdr)
+blt = r.get_data(as_text=True)
+ok(r.status_code == 200 and blt.startswith("3 2\n") and '"Alice"' in blt,
+   "BLT export: ranked contest downloads as standard file")
+ok(c.get("/admin/api/polls/special_ref/blt/why?live=1", headers=hdr).status_code == 404,
+   "text questions are not exportable")
+ok(c.get("/admin/api/polls/special_ref/blt/officer", headers=chi_hdr).status_code == 403,
+   "BLT export scoped to admins of the poll")
+r = c.get("/admin/api/polls/special_ref/blt/measure?live=1", headers=hdr)
+ok(r.status_code == 200 and r.get_data(as_text=True).startswith("2 1\n"),
+   "yesno exports as a 1-seat BLT")
+
 print(f"SMOKE TEST: all {passed} checks passed")

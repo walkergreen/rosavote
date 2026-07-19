@@ -143,7 +143,8 @@
         <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
         <p class="kicker">Import voter roll (national admins)</p>
         <p><b>Required header:</b> <code>member_id</code>. <b>Optional:</b>
-        <code>chapter</code>. Every other column is ignored, so a full
+        <code>chapter</code>, <code>weight</code> (integer 1&ndash;1000 ballot
+        weight, default 1). Every other column is ignored, so a full
         membership export works as-is. One code is minted per new member;
         already-imported members are skipped. Codes are stored hashed — the
         plaintext manifest exists exactly once, wherever you receive it.</p>
@@ -231,6 +232,42 @@
         </div>
         <div id="results-view" style="margin-top:12px"></div>
         <div id="results-msg"></div>
+        <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+        <p class="kicker">Ballots — export &amp; independent verification</p>
+        <p>Download each contest as a standard <b>.blt</b> file (ballot weights
+        included) and reproduce the result in software we don't control:</p>
+        <div id="blt-list"><p><small>Pick a poll above, then</small></p></div>
+        <button class="btn dark sm" id="blt-refresh">List ballot files</button>
+        <details class="vk-how" style="margin-top:12px;border:1px solid rgba(0,0,0,.25);background:var(--cream);font-size:.82rem">
+          <summary style="cursor:pointer;padding:9px 11px;font-weight:700;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dsa)">How to independently verify results</summary>
+          <div style="padding:0 12px 12px;line-height:1.5">
+            <p style="font-size:.82rem"><b>1 · Get the ballot files.</b> Download the .blt for each
+            contest above. The format is the OpaVote/OpenSTV standard: first line
+            = <code>candidates seats</code>; each ballot line = <code>weight
+            rank1 rank2 … 0</code> (<code>1 0</code> is an abstention); then a
+            <code>0</code> terminator, quoted candidate names, and the title.</p>
+            <p style="font-size:.82rem"><b>2 · Recount in independent software.</b> Any of:
+            upload to <b>OpaVote</b> (choose Scottish STV); run <b>OpenSTV/Droop</b>;
+            or run the tabulator that ships with this codebase:
+            <code>python3 tools/stv_tabulate.py contest.blt</code> — it prints the
+            same round-by-round table the Results tab charts. Yes/No contests are
+            1-seat files where the counts are directly visible.</p>
+            <p style="font-size:.82rem"><b>3 · Delegate alternates (two-count method).</b> Download
+            the same contest with "recount" — identical ballots, seats set to
+            delegates+alternates. Winners of the recount who aren't already
+            delegates are the alternates, in order of election.</p>
+            <p style="font-size:.82rem"><b>4 · Check the record itself.</b> After certification the
+            close-out export publishes a tamper-evident hash chain over every
+            ballot (<code>tools/build_chain.py</code>, verified by
+            <code>tools/verify.py</code>); voters can confirm their own receipt at
+            <code>/p/&lt;poll&gt;/verify?receipt=…</code> and against the
+            aggregate used-code counts on the Voters tab.</p>
+            <p style="font-size:.82rem"><b>Weighted polls:</b> weights ride in the .blt weight
+            column, so independent tabulators reproduce weighted results with no
+            extra steps. Current weights are visible per voter on the Voters tab;
+            every weight change is in the audit log.</p>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -284,7 +321,12 @@ function msg(id, cls, text){ $(id).innerHTML = text ? '<div class="msg '+cls+'">
 function api(path, opts){
   opts = opts || {};
   opts.headers = Object.assign({"X-Admin-Token": TOKEN, "Content-Type": "application/json"}, opts.headers||{});
-  return fetch(path, opts).then(function(r){ return r.json().then(function(j){ return {status:r.status, body:j}; }); });
+  return fetch(path, opts).then(function(r){
+    var ct = r.headers.get("content-type") || "";
+    if(ct.indexOf("json") === -1)
+      return r.text().then(function(t){ return {status:r.status, raw:(r.status===200?t:null), body:{}}; });
+    return r.json().then(function(j){ return {status:r.status, body:j}; });
+  });
 }
 function fmtTs(ts, tz){
   if(!ts) return "—";
@@ -498,7 +540,20 @@ function loadVoters(){
                : "<span class='chip closed'>used — NO BALLOT</span>"))
         : "<span class='chip not_open'>not voted</span>";
       row.innerHTML = "<div><b>"+esc(v.member_id||"?")+"</b> "+status+(v.reissued?" <span class='chip'>reissued</span>":"")+
+        (v.weight!==1?" <span class='chip open'>weight ×"+v.weight+"</span>":"")+
         "<br/><small>"+esc(v.chapter||"")+(v.receipt?(" &middot; receipt "+esc(v.receipt)):"")+"</small></div>";
+      var wb = document.createElement("button"); wb.className="btn ghost sm"; wb.textContent="Weight";
+      wb.style.marginRight="6px";
+      wb.onclick = function(){
+        var nw = prompt("Ballot weight for "+v.member_id+" (integer 1–1000).\nApplies to live and final tallies immediately — audited.", String(v.weight||1));
+        if(nw===null) return;
+        api("/admin/api/polls/"+pid+"/voters/weight", {method:"POST",
+            body: JSON.stringify({member_id: v.member_id, weight: parseInt(nw,10)})}).then(function(r2){
+          if(r2.status===200){ msg("voters-msg","okc",v.member_id+" weight set to ×"+r2.body.weight+"."); loadVoters(); }
+          else msg("voters-msg","err","Weight not set: "+(r2.body.message||JSON.stringify(r2.body)));
+        });
+      };
+      row.appendChild(wb);
       if(v.voted && v.ballot_received && !v.voided){
         var vb = document.createElement("button"); vb.className="btn dark sm"; vb.textContent="Void & reissue";
         vb.onclick = function(){
@@ -659,6 +714,48 @@ function stvChart(q){
 }
 $("results-load").onclick = function(){ loadResults(false); };
 $("results-live").onclick = function(){ loadResults(true); };
+
+// ---- BLT export ----
+function downloadBlt(pid, key, recount){
+  var qs = [];
+  if(recount) qs.push("recount=1");
+  if(!POLLS[pid].finalized) qs.push("live=1");   // root live export (audited)
+  api("/admin/api/polls/"+pid+"/blt/"+key+(qs.length?("?"+qs.join("&")):"")).then(function(r){
+    if(r.raw){
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([r.raw], {type:"text/plain"}));
+      a.download = pid+"_"+key+(recount?"_alternates_recount":"")+".blt";
+      a.click(); URL.revokeObjectURL(a.href);
+    } else msg("results-msg","err","Export failed: "+(r.body&&r.body.message||r.body&&r.body.error||r.status));
+  });
+}
+$("blt-refresh").onclick = function(){
+  var pid = $("results-poll").value, c = POLLS[pid];
+  var el = $("blt-list");
+  var qs = (c.questions||[]).filter(function(q){ return q.type==="ranked"||q.type==="yesno"; });
+  if(!qs.length){
+    el.innerHTML = "<p><small>"+(c.questions?"No exportable (ranked / yes-no) questions on this ballot.":
+      "Legacy demo poll — export its BLTs offline with tools/make_blt.py --from-firestore.")+"</small></p>";
+    return;
+  }
+  el.innerHTML = "";
+  qs.forEach(function(q){
+    var row = document.createElement("div"); row.className="poll";
+    row.innerHTML = "<div><b>"+esc(q.title)+"</b><br/><small>"+esc(q.type)+
+      (q.type==="ranked"?(" · "+(q.seats||1)+" seat(s)"+(q.secret?" · secret":"")):"")+"</small></div>";
+    var btns = document.createElement("div");
+    var b1 = document.createElement("button"); b1.className="btn ghost sm"; b1.textContent="Download .blt";
+    b1.onclick = function(){ downloadBlt(pid, q.key, false); };
+    btns.appendChild(b1);
+    if(q.type==="ranked" && q.alternates){
+      var b2 = document.createElement("button"); b2.className="btn ghost sm"; b2.style.marginLeft="6px";
+      b2.textContent = "Alternates recount .blt";
+      b2.onclick = function(){ downloadBlt(pid, q.key, true); };
+      btns.appendChild(b2);
+    }
+    row.appendChild(btns); el.appendChild(row);
+  });
+};
 
 // ---- ballot lookup (root troubleshooting) ----
 $("lookup-btn").onclick = function(){

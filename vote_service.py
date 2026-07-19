@@ -549,15 +549,18 @@ def _claim_code(txn, codes_coll, ch: str):
 
 
 def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
-                       comments: dict, identity: dict, code_h):
+                       comments: dict, identity: dict, code_h, weight: int = 1):
     """Write the main (identity-linked) record and, when the ballot has
     secret questions, the separate secret-ballot record. Shared by coded
-    votes and provisional promotion so the storage split can't drift."""
+    votes and provisional promotion so the storage split can't drift.
+    `weight` is only stamped for codeless (provisional) ballots — coded
+    ballots resolve their CURRENT weight from the code doc at tally time."""
     skeys = set(secret_keys(cfg))
     main_answers = {k: v for k, v in answers.items() if k not in skeys}
     nonce = secrets.token_hex(8)
     ac = canon_answers(main_answers)
     rh = make_record_hash(receipt, ac, nonce)
+    wfield = {"weight": weight} if (code_h is None and weight != 1) else {}
     db.collection(f"{poll_id}__ballots").document(rh).set({
         "receipt": receipt, "answers": main_answers, "answers_canon": ac,
         "nonce": nonce, "record_hash": rh,
@@ -565,6 +568,7 @@ def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
         "comment": comments.get("text", ""),   # legacy field for older tools
         "comments": comments,
         "day_bucket": firestore.SERVER_TIMESTAMP,
+        **wfield,
         **identity,
     })
     if skeys:
@@ -577,6 +581,7 @@ def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
             "nonce": dnonce, "record_hash": drh,
             "code_hash": code_h,   # ADMIN-ONLY troubleshooting trace — never chapter-visible
             "day_bucket": firestore.SERVER_TIMESTAMP,
+            **wfield,
             **({"provisional": True} if identity.get("provisional") else {}),
         })
     return rh
@@ -1554,43 +1559,82 @@ def cron_closeout():
 
 
 # ---- admin: results (finalized polls only) --------------------------------
-def _blt_text(rows, key, options, seats):
-    """In-memory BLT (same shape make_blt writes) for the STV tabulator."""
+WEIGHT_MIN, WEIGHT_MAX = 1, 1000
+
+
+def _blt_text(rows, key, options, seats, title="contest"):
+    """In-memory BLT (same shape make_blt writes) for the STV tabulator.
+    rows: (answers_dict, weight) pairs — BLT carries integer ballot weights
+    natively, so weighted polls verify in any standard tabulator."""
     idx = {o["id"]: i + 1 for i, o in enumerate(options)}
     lines = [f"{len(options)} {seats}"]
-    for a in rows:
+    for a, w in rows:
         ranking = [str(x).upper() for x in (a.get(key) or [])]
         if not ranking or ranking == ["ABSTAIN"]:
-            lines.append("1 0")
+            lines.append(f"{w} 0")
             continue
         if not set(ranking) <= set(idx):
             continue
-        lines.append("1 " + " ".join(str(idx[c]) for c in ranking) + " 0")
+        lines.append(f"{w} " + " ".join(str(idx[c]) for c in ranking) + " 0")
     lines.append("0")
     for o in options:
         lines.append('"' + o["name"].replace('"', "'") + '"')
-    lines.append('"contest"')
+    lines.append('"' + title.replace('"', "'") + '"')
     return "\n".join(lines) + "\n"
 
 
-def compute_results(poll_id: str, cfg: dict) -> dict:
-    """Tallies per question. Ranked contests use the shipped Scottish STV
-    tabulator; delegate-style contests also run the alternates recount
-    (two-count method). Text answers are counted, never displayed."""
-    import stv_tabulate
+def _code_weights(poll_id: str) -> dict:
+    """code_hash -> voter weight (default 1). Weights live on the CODE docs
+    so they can be provisioned at import and edited before/during/after the
+    election — tallies always resolve the CURRENT weight."""
+    weights = {}
+    for snap in db.collection(f"{poll_id}__codes").stream():
+        d = snap.to_dict() or {}
+        try:
+            w = int(d.get("weight") or 1)
+        except (TypeError, ValueError):
+            w = 1
+        weights[snap.id] = max(WEIGHT_MIN, min(WEIGHT_MAX, w))
+    return weights
+
+
+def _ballot_weight(d: dict, weights: dict) -> int:
+    w = weights.get(d.get("code_hash"))
+    if w is None:   # promoted provisionals carry their own weight field
+        try:
+            w = int(d.get("weight") or 1)
+        except (TypeError, ValueError):
+            w = 1
+    return max(WEIGHT_MIN, min(WEIGHT_MAX, w))
+
+
+def _tally_rows(poll_id: str):
+    """(main_rows, comments_rows, secret_rows) with per-ballot weights."""
+    weights = _code_weights(poll_id)
     main_rows, comments_rows = [], []
     for snap in db.collection(f"{poll_id}__ballots").stream():
         d = snap.to_dict() or {}
         if d.get("voided"):
             continue
-        main_rows.append(d.get("answers") or {})
+        main_rows.append((d.get("answers") or {}, _ballot_weight(d, weights)))
         comments_rows.append(d.get("comments") or
                              ({"text": d["comment"]} if d.get("comment") else {}))
     secret_rows = []
     for snap in db.collection(f"{poll_id}__delegate_ballots").stream():
         d = snap.to_dict() or {}
         if not d.get("voided"):
-            secret_rows.append(d)
+            secret_rows.append((d, _ballot_weight(d, weights)))
+    return main_rows, comments_rows, secret_rows
+
+
+def compute_results(poll_id: str, cfg: dict) -> dict:
+    """WEIGHTED tallies per question (each ballot counts at its voter's
+    current weight; default 1). Ranked contests use the shipped Scottish STV
+    tabulator; delegate-style contests also run the alternates recount
+    (two-count method). Text answers are counted, never displayed."""
+    import stv_tabulate
+    main_rows, comments_rows, secret_rows = _tally_rows(poll_id)
+    weighted = any(w != 1 for _, w in main_rows) or any(w != 1 for _, w in secret_rows)
 
     out = []
     for q in poll_questions(cfg):
@@ -1600,10 +1644,10 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
         rows = secret_rows if q.get("secret") else main_rows
         if typ == "yesno":
             counts = {"YES": 0, "NO": 0, "ABSTAIN": 0}
-            for a in main_rows:
+            for a, w in main_rows:
                 v = str(a.get(key, "")).upper()
                 if v in counts:
-                    counts[v] += 1
+                    counts[v] += w
             contested = counts["YES"] + counts["NO"]
             entry["counts"] = counts
             entry["result"] = ("PASSES" if counts["YES"] > counts["NO"] else
@@ -1624,10 +1668,10 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
                                        if w not in res["winners"]]
         elif typ == "multi":
             counts = {o["id"]: 0 for o in q["options"]}
-            for a in main_rows:
+            for a, w in main_rows:
                 for choice in (a.get(key) or []):
                     if choice in counts:
-                        counts[choice] += 1
+                        counts[choice] += w
             entry["counts"] = {o["name"]: counts[o["id"]] for o in q["options"]}
         elif typ == "text":
             entry["responses"] = sum(1 for cm in comments_rows if (cm or {}).get(key))
@@ -1636,7 +1680,8 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
     return {"poll_id": poll_id, "name": cfg.get("name"),
             "finalized_at": cfg.get("finalized_at"),
             "final_counts": cfg.get("final_counts"),
-            "ballots_counted": len(main_rows), "questions": out}
+            "ballots_counted": len(main_rows), "weighted": weighted,
+            "questions": out}
 
 
 @app.get("/admin/api/polls/<poll_id>/results")
@@ -1708,6 +1753,81 @@ def admin_ballot_lookup(poll_id):
     } for d in matches]}), 200
 
 
+@app.get("/admin/api/polls/<poll_id>/blt/<qkey>")
+def admin_export_blt(poll_id, qkey):
+    """Download a contest as a standard .blt file for INDEPENDENT
+    verification (OpaVote, OpenSTV/Droop, tools/stv_tabulate.py). Ballot
+    weights are carried natively. Same gate as results: finalized, or
+    national + ?live=1 (audited). ?recount=1 emits the alternates-recount
+    header (seats+alternates) over the same ballots."""
+    ident = require_admin(poll_id)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return jsonify({"error": "unknown_poll"}), 404
+    if not cfg.get("finalized"):
+        if not (request.args.get("live") and ident["role"] == "national"):
+            return jsonify({"error": "not_finalized"}), 409
+        _audit(poll_id, "live_blt_export", ident["name"], question=qkey)
+    q = next((x for x in poll_questions(cfg) if x["key"] == qkey), None)
+    if not q or q["type"] not in ("ranked", "yesno"):
+        return jsonify({"error": "not_exportable",
+                        "message": "only ranked and yesno questions export as BLT"}), 404
+    main_rows, _, secret_rows = _tally_rows(poll_id)
+    if q["type"] == "yesno":
+        options = _yesno_options(dict(q, allow_abstain=False))
+        rows = [(a, w) for a, w in main_rows
+                if str(a.get(qkey, "")).upper() in ("YES", "NO")]
+        seats = 1
+        # yesno as single-choice rankings: {"key": ["YES"]}-shaped rows
+        rows = [({qkey: [str(a.get(qkey)).upper()]}, w) for a, w in rows]
+    else:
+        options = q["options"]
+        seats = int(q.get("seats", 1))
+        if request.args.get("recount"):
+            seats += int(q.get("alternates", 0))
+        rows = secret_rows if q.get("secret") else main_rows
+    blt = _blt_text(rows, qkey, options, seats,
+                    title=f"{cfg.get('name', poll_id)} - {q['title']}"
+                          + (" - ALTERNATES RECOUNT" if request.args.get("recount") else ""))
+    fname = f"{poll_id}_{qkey}" + ("_alternates_recount" if request.args.get("recount") else "") + ".blt"
+    return Response(blt, mimetype="text/plain",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+
+@app.post("/admin/api/polls/<poll_id>/voters/weight")
+def admin_set_weight(poll_id):
+    """Set a voter's ballot weight (integer 1–1000) — national admins only,
+    audited. Weights live on the code docs and are resolved at tally time,
+    so provisioning before open, or adjusting during/after the election,
+    always flows into the count (and the exported BLTs)."""
+    ident = require_admin(poll_id, national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    if not chapter_or_none(poll_id):
+        return jsonify({"error": "unknown_poll"}), 404
+    data = request.get_json(silent=True) or {}
+    member_id = str(data.get("member_id") or "").strip()
+    try:
+        weight = int(data.get("weight"))
+    except (TypeError, ValueError):
+        weight = 0
+    if not member_id or not WEIGHT_MIN <= weight <= WEIGHT_MAX:
+        return jsonify({"error": "bad_request",
+                        "message": f"member_id and integer weight "
+                                   f"{WEIGHT_MIN}–{WEIGHT_MAX} required"}), 400
+    matched = 0
+    for snap in db.collection(f"{poll_id}__codes").where("member_id", "==", member_id).stream():
+        snap.reference.update({"weight": weight})
+        matched += 1
+    if not matched:
+        return jsonify({"error": "member_not_found"}), 404
+    _audit(poll_id, "weight_set", ident["name"], member_id=member_id,
+           weight=weight, codes_updated=matched)
+    return jsonify({"ok": True, "member_id": member_id, "weight": weight}), 200
+
+
 # ---- admin: voters (turnout status — never how anyone voted) --------------
 VOTERS_LIST_CAP = 1000
 IMPORT_CAP = 20000
@@ -1751,9 +1871,14 @@ def admin_list_voters(poll_id):
         if member_q and str(d.get("member_id", "")) != member_q:
             continue
         if len(voters) < VOTERS_LIST_CAP:
+            try:
+                wv = max(WEIGHT_MIN, min(WEIGHT_MAX, int(d.get("weight") or 1)))
+            except (TypeError, ValueError):
+                wv = 1
             voters.append({"member_id": d.get("member_id"),
                            "chapter": d.get("chapter"),
                            "voted": used,
+                           "weight": wv,
                            "ballot_received": bool(ballot),
                            "receipt": (ballot or {}).get("receipt"),
                            "voided": (ballot or {}).get("voided", False),
@@ -1807,7 +1932,11 @@ def _import_members(poll_id, cfg, members, ident, source):
         mid = str((m.get("member_id") if isinstance(m, dict) else m) or "").strip()
         chapter = str((m.get("chapter") if isinstance(m, dict) else "") or "").strip() \
             or cfg.get("name", "")
-        if not mid:
+        try:
+            weight = int((m.get("weight") if isinstance(m, dict) else 1) or 1)
+        except (TypeError, ValueError):
+            weight = 0
+        if not mid or not WEIGHT_MIN <= weight <= WEIGHT_MAX:
             bad += 1
             continue
         if mid in existing:
@@ -1815,21 +1944,23 @@ def _import_members(poll_id, cfg, members, ident, source):
             continue
         existing.add(mid)
         code = secrets.token_urlsafe(12)
-        codes.document(code_hash(code)).set({
-            "used": False, "member_id": mid, "chapter": chapter})
-        created.append({"member_id": mid, "chapter": chapter, "code": code,
-                        "vote_link": f"{base}/p/{poll_id}/v/{code}"})
+        doc = {"used": False, "member_id": mid, "chapter": chapter}
+        if weight != 1:
+            doc["weight"] = weight
+        codes.document(code_hash(code)).set(doc)
+        created.append({"member_id": mid, "chapter": chapter, "weight": weight,
+                        "code": code, "vote_link": f"{base}/p/{poll_id}/v/{code}"})
     _audit(poll_id, "voters_import", ident["name"], source=source,
            created=len(created), skipped=skipped, bad=bad)
     return created, skipped, bad
 
 
 def _manifest_csv(created) -> str:
-    lines = ["member_id,chapter,code,vote_link"]
+    lines = ["member_id,chapter,weight,code,vote_link"]
     for c in created:
         lines.append(",".join([c["member_id"],
                                '"' + str(c["chapter"]).replace('"', '""') + '"',
-                               c["code"], c["vote_link"]]))
+                               str(c.get("weight", 1)), c["code"], c["vote_link"]]))
     return "\n".join(lines) + "\n"
 
 
@@ -1877,7 +2008,8 @@ def admin_import_voters_gcs(poll_id):
     members = []
     for row in reader:
         members.append({"member_id": (row.get(headers["member_id"]) or "").strip(),
-                        "chapter": (row.get(headers.get("chapter", ""), "") or "").strip()})
+                        "chapter": (row.get(headers.get("chapter", ""), "") or "").strip(),
+                        "weight": (row.get(headers.get("weight", ""), "") or "").strip() or 1})
         if len(members) > SERVER_IMPORT_CAP:
             return jsonify({"error": "too_many",
                             "message": f"cap is {SERVER_IMPORT_CAP} rows"}), 400
@@ -2031,9 +2163,13 @@ def admin_adjudicate_provisional(poll_id, receipt):
     # identity-linked / secret split as a coded vote.
     answers = prov.get("answers") or {}
     comments = prov.get("comments") or ({"text": prov["comment"]} if prov.get("comment") else {})
+    try:
+        pw = max(WEIGHT_MIN, min(WEIGHT_MAX, int(data.get("weight") or 1)))
+    except (TypeError, ValueError):
+        pw = 1
     _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
                        {"member_id": member_id, "chapter": prov.get("chapter"),
-                        "provisional": True}, None)
+                        "provisional": True}, None, weight=pw)
     ref.update({"status": "verified", "member_id": member_id,
                 "adjudicated_by": ident["name"], "adjudicated_at": firestore.SERVER_TIMESTAMP})
     _audit(poll_id, "provisional_verify", ident["name"], receipt=receipt, member_id=member_id)
