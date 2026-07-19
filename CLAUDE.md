@@ -123,6 +123,15 @@ order with pre-elected carry-in and later-seat/supply feasibility
 carry `unconstrained` (winners/stages) — console toggle + results.txt show
 both outcomes.
 
+Ranked questions choose their counting method: `method: scottish` (default)
+or `meek` (official Meek STV — required for YDSA delegate elections; full
+stage log; constraints/groups supported). Published results FREEZE into
+`{poll}__published/results` (JSON blob) at publish time + in-process cache —
+public page + admin results serve the frozen copy (`?fresh=1` recomputes).
+Demo console carries `npc_atlarge_2025` — the real 2025 NPC At-Large
+election replayed from the official OpaVote export as a frozen result.
+License: AGPL-3.0, © 2026 Walker Green (LICENSE + README).
+
 Windows: `timezone` (IANA, default America/New_York) — builder datetimes are
 poll-local; Art. V date math uses the poll tz. `finalized` polls reject votes
 regardless of window and refuse builder edits without an explicit
