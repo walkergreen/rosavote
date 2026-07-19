@@ -825,15 +825,9 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
-      <p style="margin-top:14px;margin-bottom:4px"><b>Try it now &mdash; demo admin token:</b><br/>
-      <code class="tc">DEMO-ADMIN-TOKEN-2026</code></p>
-      <p class="fine" style="margin-top:6px">Sign in with this token to explore the console as a
-      <b>chapter admin of the Demo Sandbox poll only</b> &mdash; view its voters and
-      turnout, adjudicate its provisionals, void &amp; reissue its ballots, see its
-      results, and use the manual BLT count workbench. It cannot build elections,
-      import rolls, set vote weights, or touch any real poll. The sandbox is shared
-      and public, so expect other people's fingerprints; its matching
-      <b>voting</b> test code is <code class="tc" style="font-size:.8rem">TEST-SANDBOX-2026-DEMO</code>.</p>
+      <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
+      <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
+      no credentials needed.</p>
       <details style="margin-top:12px">
         <summary>How to get access</summary>
         <div class="dbody">

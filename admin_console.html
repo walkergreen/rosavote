@@ -83,6 +83,16 @@
       <input type="password" id="tok" autocomplete="off"/>
       <button class="btn" id="login-btn">Sign in</button>
       <div id="login-msg"></div>
+      <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
+      <p class="kicker">Just exploring?</p>
+      <p style="margin-bottom:4px">Use the public demo token
+      <code class="tc" style="font-size:.85rem">DEMO-ADMIN-TOKEN-2026</code> — it signs you in as a
+      chapter admin of the shared <b>Demo Sandbox</b> poll only: its voters,
+      turnout, provisionals, void &amp; reissue, results, and the manual count
+      workbench. It cannot build elections, import rolls, set vote weights, or
+      touch any real poll. (The sandbox's <i>voting</i> test code is
+      <code class="tc" style="font-size:.8rem">TEST-SANDBOX-2026-DEMO</code>.)</p>
+      <button class="btn dark" id="demo-btn">Open console with the demo token &rarr;</button>
     </div>
   </div>
 
@@ -389,6 +399,7 @@ $("login-btn").onclick = function(){
   });
 };
 $("logout-btn").onclick = function(){ sessionStorage.removeItem("admin_token"); location.reload(); };
+$("demo-btn").onclick = function(){ $("tok").value = "DEMO-ADMIN-TOKEN-2026"; $("login-btn").onclick(); };
 
 // ---- tabs ----
 var PANES = ["polls-pane","builder-pane","voters-pane","results-pane","prov-pane","void-pane"];

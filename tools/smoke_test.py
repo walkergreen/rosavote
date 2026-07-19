@@ -179,7 +179,10 @@ DAY = 86400
 now = int(_time.time())
 
 # console shell + whoami
-ok("Admin Console" in c.get("/admin/").data.decode(), "console page served")
+console_html = c.get("/admin/").data.decode()
+ok("Admin Console" in console_html, "console page served")
+ok("DEMO-ADMIN-TOKEN-2026" in console_html and 'id="demo-btn"' in console_html,
+   "sign-in page carries the demo token + one-tap demo button")
 ok(c.get("/admin/api/whoami").status_code == 403, "whoami needs token")
 r = c.get("/admin/api/whoami", headers=hdr)
 ok(r.status_code == 200 and r.get_json()["role"] == "national", "whoami national")
