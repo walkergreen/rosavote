@@ -101,32 +101,39 @@
         voting window must fall between 4 months and 45 days before it, and
         apportionment must be confirmed done.</p>
         <label>Poll ID <small>(lowercase; new ID creates a poll)</small></label>
-        <input type="text" id="b-pid" placeholder="debs_endorsement__nyc"/>
-        <label>Chapter display name</label>
+        <input type="text" id="b-pid" placeholder="spring_referendum__nyc"/>
+        <label>Chapter / election display name</label>
         <input type="text" id="b-name"/>
+        <label>Timezone (IANA — windows below are entered in this timezone)</label>
+        <input type="text" id="b-tz" value="America/New_York" placeholder="America/Chicago"/>
         <div class="row">
-          <div><label>Opens at</label><input type="datetime-local" id="b-opens"/></div>
-          <div><label>Closes at</label><input type="datetime-local" id="b-closes"/></div>
+          <div><label>Opens at (poll-local)</label><input type="datetime-local" id="b-opens"/></div>
+          <div><label>Closes at (poll-local)</label><input type="datetime-local" id="b-closes"/></div>
         </div>
         <div class="row">
-          <div><label>Convention date</label><input type="date" id="b-conv"/></div>
+          <div><label>Convention date <small>(only for delegate elections)</small></label>
+            <input type="date" id="b-conv"/></div>
           <div><label style="margin-bottom:14px">Apportionment done</label>
             <input type="checkbox" id="b-app" style="width:22px;height:22px"/></div>
         </div>
         <label>Test code (optional, repeatable, never recorded)</label>
         <input type="text" id="b-test"/>
-        <label>Local issue 1 (stored as q6 — displays as Q7)</label>
-        <input type="text" id="b-q6"/>
-        <label>Local issue 2 (stored as q8 — displays as Q8)</label>
-        <input type="text" id="b-q8"/>
-        <div class="row">
-          <div><label>Delegate seats</label><input type="number" id="b-seats" min="1"/></div>
-          <div><label>Alternates</label><input type="number" id="b-alts" min="0"/></div>
-          <div><label>Real delegates</label><input type="number" id="b-rdel" min="0"/></div>
-          <div><label>Real alternates</label><input type="number" id="b-ralt" min="0"/></div>
+        <label>Questions (JSON list — the whole ballot, in order)</label>
+        <div class="row" style="margin:0 0 6px">
+          <button class="btn ghost sm" data-preset="referendum">+ Referendum</button>
+          <button class="btn ghost sm" data-preset="officer">+ Officer election</button>
+          <button class="btn ghost sm" data-preset="delegates">+ Delegate election</button>
+          <button class="btn ghost sm" data-preset="feedback">+ Free-text</button>
+          <button class="btn ghost sm" data-preset="pledges">+ Multi-select</button>
         </div>
-        <label>Delegate candidates — one per line: <code>ID | Display Name</code></label>
-        <textarea id="b-cands" placeholder="LONDON | Meyer London&#10;FLYNN | Elizabeth Gurley Flynn"></textarea>
+        <textarea id="b-questions" style="min-height:220px" placeholder='[
+  {"key": "measure_1", "type": "yesno", "title": "Shall the chapter…?"}
+]'></textarea>
+        <p style="font-size:.78rem;margin:6px 0 0">Types: <code>yesno</code> ·
+        <code>ranked</code> (options, seats, alternates; <code>secret</code> hides identity;
+        <code>delegate</code> additionally enforces Art. V) · <code>multi</code> ·
+        <code>text</code>. Leave empty on a legacy demo poll to keep its built-in
+        8-question ballot.</p>
         <button class="btn" id="b-save">Save poll</button>
         <div id="b-msg"></div>
       </div>
@@ -184,13 +191,21 @@ function api(path, opts){
   opts.headers = Object.assign({"X-Admin-Token": TOKEN, "Content-Type": "application/json"}, opts.headers||{});
   return fetch(path, opts).then(function(r){ return r.json().then(function(j){ return {status:r.status, body:j}; }); });
 }
-function fmtTs(ts){ return ts ? new Date(ts*1000).toLocaleString() : "—"; }
-function toLocalInput(ts){
-  if(!ts) return "";
-  var d = new Date(ts*1000), p=function(n){return String(n).padStart(2,"0");};
-  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes());
+function fmtTs(ts, tz){
+  if(!ts) return "—";
+  try { return new Date(ts*1000).toLocaleString(undefined, {timeZone: tz||"America/New_York", timeZoneName: "short"}); }
+  catch(e){ return new Date(ts*1000).toLocaleString(); }
 }
-function fromLocalInput(v){ return v ? Math.floor(new Date(v).getTime()/1000) : null; }
+function tsToNaive(ts, tz){   // unix -> "YYYY-MM-DDTHH:MM" in the POLL's timezone
+  if(!ts) return "";
+  try {
+    var p = {};
+    new Intl.DateTimeFormat("en-CA", {timeZone: tz||"America/New_York", year:"numeric",
+      month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hourCycle:"h23"})
+      .formatToParts(new Date(ts*1000)).forEach(function(x){ p[x.type]=x.value; });
+    return p.year+"-"+p.month+"-"+p.day+"T"+p.hour+":"+p.minute;
+  } catch(e){ return ""; }
+}
 
 // ---- sign in ----
 function boot(){
@@ -234,8 +249,10 @@ function loadPolls(){
     ids.forEach(function(pid){
       var c = POLLS[pid];
       var div = document.createElement("div"); div.className="poll";
-      div.innerHTML = "<div><b>"+esc(c.name)+"</b> <span class='chip "+esc(c.state)+"'>"+esc(c.state.replace("_"," "))+"</span><br/>"+
-        "<code>"+esc(pid)+"</code><br/><small>opens "+esc(fmtTs(c.opens_at))+" &middot; closes "+esc(fmtTs(c.closes_at))+"</small></div>";
+      div.innerHTML = "<div><b>"+esc(c.name)+"</b> <span class='chip "+esc(c.state)+"'>"+esc(c.state.replace("_"," "))+"</span>"+
+        (c.finalized ? " <span class='chip closed'>finalized</span>" : "")+"<br/>"+
+        "<code>"+esc(pid)+"</code><br/><small>opens "+esc(fmtTs(c.opens_at, c.timezone))+" &middot; closes "+esc(fmtTs(c.closes_at, c.timezone))+
+        " &middot; "+esc(c.timezone||"America/New_York")+"</small></div>";
       var btns = document.createElement("div");
       var edit = document.createElement("button"); edit.className="btn ghost sm"; edit.textContent="Edit";
       edit.onclick = function(){ fillBuilder(pid, c); };
@@ -257,34 +274,80 @@ function loadPolls(){
 $("refresh-btn").onclick = loadPolls;
 
 // ---- builder ----
+var editingLegacy = null;   // legacy q6/q8/q7 of the poll being edited (passthrough)
 function fillBuilder(pid, c){
   document.querySelector('[data-pane="builder-pane"]').click();
   $("b-pid").value = pid; $("b-name").value = c.name || "";
-  $("b-opens").value = toLocalInput(c.opens_at); $("b-closes").value = toLocalInput(c.closes_at);
+  $("b-tz").value = c.timezone || "America/New_York";
+  $("b-opens").value = tsToNaive(c.opens_at, $("b-tz").value);
+  $("b-closes").value = tsToNaive(c.closes_at, $("b-tz").value);
   $("b-conv").value = c.convention_date || ""; $("b-app").checked = !!c.apportionment_done;
-  $("b-test").value = c.test_code || ""; $("b-q6").value = c.q6 || ""; $("b-q8").value = c.q8 || "";
-  var q7 = c.q7 || {};
-  $("b-seats").value = q7.seats || 1; $("b-alts").value = q7.alternates || 0;
-  $("b-rdel").value = q7.real_delegates || 0; $("b-ralt").value = q7.real_alternates || 0;
-  $("b-cands").value = (q7.candidates||[]).map(function(x){ return x.id+" | "+x.name; }).join("\n");
+  $("b-test").value = c.test_code || "";
+  $("b-questions").value = c.questions ? JSON.stringify(c.questions, null, 2) : "";
+  editingLegacy = c.questions ? null : {q6: c.q6, q8: c.q8, q7: c.q7};
   msg("b-msg","","");
 }
-$("b-save").onclick = function(){
-  var cands = $("b-cands").value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean)
-    .map(function(l){ var i=l.indexOf("|"); return {id:(i<0?l:l.slice(0,i)).trim(), name:(i<0?"":l.slice(i+1)).trim()}; });
-  var body = {
-    name: $("b-name").value, q6: $("b-q6").value, q8: $("b-q8").value,
-    test_code: $("b-test").value,
-    opens_at: fromLocalInput($("b-opens").value), closes_at: fromLocalInput($("b-closes").value),
-    convention_date: $("b-conv").value || null, apportionment_done: $("b-app").checked,
-    q7: {seats:+$("b-seats").value||0, alternates:+$("b-alts").value||0,
-         real_delegates:+$("b-rdel").value||0, real_alternates:+$("b-ralt").value||0, candidates:cands}
+var PRESETS = {
+  referendum: {key:"measure_N", type:"yesno", label:"Ballot measure",
+    title:"Shall the chapter …?", text:["Full measure text here."]},
+  officer: {key:"officer_N", type:"ranked", label:"Officer election — ranked choice",
+    title:"Elect the chapter co-chairs", seats:2, alternates:0, secret:true, shuffle:true,
+    text:["Ranked choice, counted by Scottish STV. Secret ballot."],
+    options:[{id:"CAND1",name:"Candidate One"},{id:"CAND2",name:"Candidate Two"},
+             {id:"CAND3",name:"Candidate Three"}]},
+  delegates: {key:"delegates_N", type:"ranked", label:"Convention delegates — ranked choice",
+    title:"Elect N delegates + N alternates", seats:2, alternates:1,
+    secret:true, delegate:true, shuffle:true,
+    text:["Scottish STV, two-count method for alternates. Secret ballot (Const. Art. V §5). Requires a convention date + apportionment above."],
+    options:[{id:"CAND1",name:"Candidate One"},{id:"CAND2",name:"Candidate Two"},
+             {id:"CAND3",name:"Candidate Three"}]},
+  feedback: {key:"comments_N", type:"text", label:"Open response — optional",
+    title:"Anything the chapter should know?", max:1000},
+  pledges: {key:"pledges_N", type:"multi", label:"Check all that apply — optional",
+    title:"I pledge to…", options:[{id:"OPT1",name:"Option One"},{id:"OPT2",name:"Option Two"}]}
+};
+Array.prototype.forEach.call(document.querySelectorAll("[data-preset]"), function(btn){
+  btn.onclick = function(){
+    var qs = [];
+    try { qs = $("b-questions").value.trim() ? JSON.parse($("b-questions").value) : []; }
+    catch(e){ msg("b-msg","err","Fix the JSON before adding a preset: "+e.message); return; }
+    var p = JSON.parse(JSON.stringify(PRESETS[btn.dataset.preset]));
+    p.key = p.key.replace("N", String(qs.length+1));
+    qs.push(p);
+    $("b-questions").value = JSON.stringify(qs, null, 2);
+    editingLegacy = null;
+    msg("b-msg","","");
   };
+});
+$("b-save").onclick = function(){
+  var body = {
+    name: $("b-name").value, test_code: $("b-test").value,
+    timezone: $("b-tz").value.trim() || "America/New_York",
+    opens_at: $("b-opens").value || null, closes_at: $("b-closes").value || null,
+    convention_date: $("b-conv").value || null, apportionment_done: $("b-app").checked
+  };
+  var qtxt = $("b-questions").value.trim();
+  if(qtxt){
+    try { body.questions = JSON.parse(qtxt); }
+    catch(e){ msg("b-msg","err","Questions JSON doesn't parse: "+e.message); return; }
+  } else if(editingLegacy && editingLegacy.q7){
+    body.q6 = editingLegacy.q6; body.q8 = editingLegacy.q8; body.q7 = editingLegacy.q7;
+  } else {
+    msg("b-msg","err","Add at least one question (use the preset buttons)."); return;
+  }
   msg("b-msg","warn","Saving…");
   api("/admin/api/polls/"+$("b-pid").value.trim(), {method:"POST", body:JSON.stringify(body)}).then(function(r){
     if(r.status===200){
       msg("b-msg","okc","Saved."+(r.body.warnings&&r.body.warnings.length ? "\nWarnings:\n- "+r.body.warnings.join("\n- ") : ""));
       loadPolls();
+    } else if(r.status===409 && r.body.error==="finalized"){
+      if(confirm("This poll is FINALIZED. Deliberately reopen it? This is audited.")){
+        body.unfinalize = true;
+        api("/admin/api/polls/"+$("b-pid").value.trim(), {method:"POST", body:JSON.stringify(body)}).then(function(r2){
+          if(r2.status===200){ msg("b-msg","okc","Reopened and saved (audited)."); loadPolls(); }
+          else msg("b-msg","err","Not saved: "+JSON.stringify(r2.body));
+        });
+      } else msg("b-msg","warn","Left finalized; nothing saved.");
     } else {
       var e = r.body.errors ? r.body.errors.join("\n- ") : JSON.stringify(r.body);
       msg("b-msg","err","Not saved:\n- "+e);

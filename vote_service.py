@@ -48,63 +48,181 @@ class _LazyDB:
 
 db = _LazyDB()
 
-# ---- shared ballot definition (identical across all chapters) -------------
-# Five questions. Ranked questions (q2, q3) are Scottish STV; an ["ABSTAIN"]
-# ranking abstains on that question. Pledges are optional multi-select.
-# The free-text comment is NOT part of the ballot record — it is stored in a
-# separate, unlinked collection (admin-only, never published), so the
-# publishable ballot file can't leak identifying prose.
-BALLOT = {
-    "q1": {"YES", "NO", "ABSTAIN"},
-    "q2": {"IE", "COORD", "NOEND", "NOTA"},
-    "q3": {"DEBS", "WILSON", "ROOSEVELT", "TAFT", "NOTA2"},
-    "pledges": {"DONATE", "VOLUNTEER", "CANVASS", "PHONEBANK", "TEXTBANK", "HOST"},
-    "text_max": 1000,
-}
+# ---- generic ballot schema ------------------------------------------------
+# Every poll is an ordered list of QUESTIONS. Types:
+#   yesno  — YES / NO (+ Abstain unless allow_abstain=False)
+#   ranked — Scottish STV; options [{id,name,sub?}], seats, alternates
+#            (alternates>0 => two-count method + over-seat rank styling),
+#            secret=True stores the ranking in the admin-only secret
+#            collection, delegate=True additionally applies Art. V rules,
+#            shuffle=True randomizes option order per page load
+#   multi  — optional multi-select with exclusive Abstain
+#   text   — optional free text (max chars); stored as an identity-linked
+#            comment on the main record, NEVER in the canonical answers, so
+#            the publishable ballot file can't leak identifying prose
+# Legacy configs (the CHAPTERS seed and early Firestore docs) don't carry a
+# questions list — demo_questions() expresses the original combined 8-question
+# ballot in this schema so they render identically.
+TEXT_MAX_DEFAULT = 1000
 
 
-def validate_answers(data, cfg) -> tuple[dict, str]:
-    """Validate the submitted answers. Returns (answers, comment_text).
-    Raises ValueError on anything malformed."""
+def _q7_note(cfg) -> str:
+    q7 = cfg["q7"]
+    real = (f"At the national convention {cfg['name']} elects {q7['real_delegates']} "
+            f"delegates and {q7['real_alternates']} alternates (2025 apportionment, "
+            f"1:60 and 1:10). ") if q7.get("real_delegates") else ""
+    total = q7["seats"] + q7["alternates"]
+    return (real + f"<b>How this is counted (two-count method):</b> delegates are "
+            f"decided by a Scottish STV count for {q7['seats']} seats. The same "
+            f"ballots are then recounted for {total} seats — anyone elected in "
+            "the recount who is not already a delegate becomes an alternate, in "
+            "order of election. Every preference you rank can matter in both "
+            "counts, so rank as many candidates as you like (a first choice is "
+            "required) — or tap Abstain to skip. Candidates appear in random "
+            "order, freshly shuffled for each voter. Ranks past the first "
+            f"{q7['seats']} turn black — those preferences still count and "
+            "help decide the alternates.")
+
+
+def demo_questions(cfg) -> list:
+    """The original combined ballot, expressed in the generic schema.
+    Chapter-specific pieces come from the legacy q6/q8/q7 config fields."""
+    q7 = cfg["q7"]
+    alts = q7["alternates"]
+    return [
+        {"key": "q1", "type": "yesno", "label": "Endorsement",
+         "section": {"style": 1, "kicker": "Section 1 of 3 · Shared questions",
+                     "title": "Chapter Poll",
+                     "sub": "Questions 1–5 are polled identically in every chapter — an "
+                            "advisory expression of the membership, reported per chapter "
+                            "and aggregated nationally."},
+         "title": "Shall DSA endorse Eugene V. Debs for President of the United States?",
+         "text": ["<em>Resolved,</em> that the Democratic Socialists of America endorses "
+                  "Eugene V. Debs — founder of the American Railway Union, leader of the "
+                  "1894 Pullman strike, five-time Socialist Party of America candidate for "
+                  "President, and Convict No. 9653, who polled nearly a million votes in "
+                  "1920 from a cell in the Atlanta Federal Penitentiary after his "
+                  "conviction under the Espionage Act for speaking against the war — for "
+                  "President of the United States;",
+                  "<em>Resolved,</em> that the campaign shall carry the platform he ran "
+                  "on: collective ownership of the railroads, mines, and utilities; the "
+                  "eight-hour day and the abolition of child labor; industrial unionism "
+                  "as the engine of working-class power; equal suffrage; amnesty for "
+                  "political prisoners and repeal of the Espionage Act; and unconditional "
+                  "opposition to imperialist war; and",
+                  "<em>Resolved,</em> that the campaign be conducted in his spirit — "
+                  "<em>“while there is a lower class, I am in it; while there is a "
+                  "criminal element, I am of it; while there is a soul in prison, I am "
+                  "not free”</em> — organizing the working class rather than "
+                  "courting donors, and that this endorsement may be withdrawn by a "
+                  "subsequent vote of the membership. <em>(Draft test language — Debs, "
+                  "1855–1926, stands in for an eventual nominee.)</em>"],
+         "option_subs": {"YES": "Endorse", "NO": "Do not endorse",
+                         "ABSTAIN": "Counted for quorum only"}},
+        {"key": "q2", "type": "ranked", "label": "Campaign structure — ranked choice",
+         "title": "Rank the campaign structures",
+         "text": ["Counted by <b>Scottish STV</b>. Tap options in order of preference — "
+                  "1 is your first choice; tap again to remove. Rank as many or as few "
+                  "as you like (at least a first choice) — or tap Abstain to skip."],
+         "options": [{"id": "IE", "name": "Independent expenditure", "sub": "DSA runs its own program"},
+                     {"id": "COORD", "name": "Coordinated campaign", "sub": "Work directly with the campaign"},
+                     {"id": "NOEND", "name": "No endorsement", "sub": "Run no presidential campaign"},
+                     {"id": "NOTA", "name": "None of the above", "sub": ""}]},
+        {"key": "q3", "type": "ranked", "label": "The 1912 field — ranked choice",
+         "title": "Rank the candidates",
+         "text": ["Test question using Debs’s actual 1912 opponents. Counted by "
+                  "<b>Scottish STV</b> — same rules as above."],
+         "options": [{"id": "DEBS", "name": "Eugene V. Debs", "sub": "Socialist Party"},
+                     {"id": "WILSON", "name": "Woodrow Wilson", "sub": "Democratic Party"},
+                     {"id": "ROOSEVELT", "name": "Theodore Roosevelt", "sub": "Progressive “Bull Moose” Party"},
+                     {"id": "TAFT", "name": "William Howard Taft", "sub": "Republican Party"},
+                     {"id": "NOTA2", "name": "None of the above", "sub": ""}]},
+        {"key": "pledges", "type": "multi", "label": "Pledges — check all that apply, optional",
+         "title": "If the campaign moves forward, I pledge to…",
+         "options": [{"id": "DONATE", "name": "Donate", "sub": "Chip in to the campaign fund"},
+                     {"id": "VOLUNTEER", "name": "Volunteer", "sub": "General campaign work"},
+                     {"id": "CANVASS", "name": "Canvass", "sub": "Knock doors with my chapter"},
+                     {"id": "PHONEBANK", "name": "Phone bank", "sub": "Call voters and members"},
+                     {"id": "TEXTBANK", "name": "Text bank", "sub": "Send campaign texts"},
+                     {"id": "HOST", "name": "Host", "sub": "House meeting or debate watch party"}],
+         "abstain_sub": "No pledges"},
+        {"key": "text", "type": "text", "label": "What should the NPC know? — optional",
+         "title": "Anything the NPC should know?",
+         "text": ["Free form — priorities, concerns, conditions on the endorsement. "
+                  "Stored with your ballot record (election administrators only, never "
+                  "published). Leave blank to abstain."],
+         "max": 1000},
+        {"key": "q7", "type": "ranked", "label": "Convention delegates — ranked choice",
+         "section": {"style": 2, "kicker": f"Section 2 of 3 · {cfg['name']}",
+                     "title": "Convention Delegates",
+                     "sub": "Your chapter's delegation to the national convention — ranked "
+                            "choice, counted by Scottish STV. <b>Secret ballot</b> (Const. "
+                            "Art. V &sect;5): your ranking is stored without your name or "
+                            "chapter. Election administrators can access delegate ballots "
+                            "only for troubleshooting, under audit."},
+         "title": f"Elect {q7['seats']} delegates + {alts} alternate" + ("" if alts == 1 else "s"),
+         "text": [_q7_note(cfg) + " <em>(Test slate — historical figures, obviously not running.)</em>"],
+         "options": [{"id": cid, "name": name, "sub": ""} for cid, name in q7["candidates"]],
+         "seats": q7["seats"], "alternates": alts,
+         "secret": True, "delegate": True, "shuffle": True},
+        {"key": "q6", "type": "yesno", "label": "Local issue 1",
+         "section": {"style": 3, "kicker": f"Section 3 of 3 · {cfg['name']}",
+                     "title": "Local Issues",
+                     "sub": f"Ballot issues specific to {cfg['name']} — these appear only "
+                            "on your chapter's ballot."},
+         "title": cfg["q6"],
+         "text": [f"This question appears only on the {cfg['name']} ballot."]},
+        {"key": "q8", "type": "yesno", "label": "Local issue 2",
+         "title": cfg["q8"],
+         "text": [f"Second local ballot issue for {cfg['name']}."]},
+    ]
+
+
+def poll_questions(cfg) -> list:
+    return cfg.get("questions") or demo_questions(cfg)
+
+
+def secret_keys(cfg) -> list:
+    return [q["key"] for q in poll_questions(cfg) if q.get("secret")]
+
+
+def validate_answers(data, cfg) -> tuple[dict, dict]:
+    """Validate submitted answers against the poll's question schema.
+    Returns (answers, comments): text-type answers are split out into
+    `comments` and never enter the canonical answer record.
+    Raises ValueError(question_key) on anything malformed."""
     if not isinstance(data, dict):
         raise ValueError("answers")
-    q1 = str(data.get("q1", "")).upper()
-    if q1 not in BALLOT["q1"]:
-        raise ValueError("q1")
-
-    def ranked(key):
+    answers, comments = {}, {}
+    for q in poll_questions(cfg):
+        key, typ = q["key"], q["type"]
         v = data.get(key)
-        if not isinstance(v, list) or not v:
-            raise ValueError(key)
-        v = [str(x).upper() for x in v]
-        if v == ["ABSTAIN"]:
-            return v
-        if len(set(v)) != len(v) or not set(v) <= BALLOT[key]:
-            raise ValueError(key)
-        return v
-
-    q2, q3 = ranked("q2"), ranked("q3")
-    p = data.get("pledges") or []
-    if not isinstance(p, list):
-        raise ValueError("pledges")
-    p = [str(x).upper() for x in p]
-    if p != ["ABSTAIN"] and (len(set(p)) != len(p) or not set(p) <= BALLOT["pledges"]):
-        raise ValueError("pledges")
-    q6 = str(data.get("q6", "")).upper()
-    if q6 not in BALLOT["q1"]:          # same YES/NO/ABSTAIN set
-        raise ValueError("q6")
-    q7 = data.get("q7")
-    q7_ids = {cid for cid, _ in cfg["q7"]["candidates"]}
-    if not isinstance(q7, list) or not q7:
-        raise ValueError("q7")
-    q7 = [str(x).upper() for x in q7]
-    if q7 != ["ABSTAIN"] and (len(set(q7)) != len(q7) or not set(q7) <= q7_ids):
-        raise ValueError("q7")
-    q8 = str(data.get("q8", "")).upper()
-    if q8 not in BALLOT["q1"]:
-        raise ValueError("q8")
-    text = str(data.get("text", "") or "")[: BALLOT["text_max"]]
-    return {"q1": q1, "q2": q2, "q3": q3, "pledges": sorted(p), "q6": q6, "q7": q7, "q8": q8}, text
+        if typ == "yesno":
+            s = str(v or "").upper()
+            allowed = {"YES", "NO"} | ({"ABSTAIN"} if q.get("allow_abstain", True) else set())
+            if s not in allowed:
+                raise ValueError(key)
+            answers[key] = s
+        elif typ == "ranked":
+            ids = {o["id"] for o in q["options"]}
+            if not isinstance(v, list) or not v:
+                raise ValueError(key)
+            v = [str(x).upper() for x in v]
+            if v != ["ABSTAIN"] and (len(set(v)) != len(v) or not set(v) <= ids):
+                raise ValueError(key)
+            answers[key] = v
+        elif typ == "multi":
+            v = v or []
+            if not isinstance(v, list):
+                raise ValueError(key)
+            v = [str(x).upper() for x in v]
+            ids = {o["id"] for o in q["options"]}
+            if v != ["ABSTAIN"] and (len(set(v)) != len(v) or not set(v) <= ids):
+                raise ValueError(key)
+            answers[key] = v if v == ["ABSTAIN"] else sorted(v)
+        elif typ == "text":
+            comments[key] = str(v or "")[: q.get("max", TEXT_MAX_DEFAULT)]
+    return answers, comments
 
 
 def canon_answers(a: dict) -> str:
@@ -256,7 +374,25 @@ def chapter_or_none(poll_id: str):
     return load_polls().get(poll_id)
 
 
+def poll_tz(cfg):
+    from zoneinfo import ZoneInfo
+    try:
+        return ZoneInfo(cfg.get("timezone") or "America/New_York")
+    except Exception:
+        return ZoneInfo("America/New_York")
+
+
+def fmt_local(ts, cfg) -> str:
+    from datetime import datetime
+    if not ts:
+        return "—"
+    d = datetime.fromtimestamp(ts, poll_tz(cfg))
+    return d.strftime("%B %-d, %Y at %-I:%M %p %Z")
+
+
 def window_state(cfg):
+    if cfg.get("finalized"):
+        return "closed"          # finalized never reopens implicitly
     now = time.time()
     if cfg.get("opens_at") and now < cfg["opens_at"]:
         return "not_open"
@@ -265,49 +401,133 @@ def window_state(cfg):
     return "open"
 
 
-def _q7_option_html(cid: str, label: str) -> str:
-    return (
-        '<button type="button" class="vk-opt" data-choice="' + cid + '" style="font-size:1.35rem;">'
-        '<span class="vk-rankn" aria-hidden="true"></span>'
-        '<span>' + label + '</span></button>'
-    )
+def _esc(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _yesno_options(q):
+    subs = q.get("option_subs") or {}
+    opts = [{"id": "YES", "name": "Yes", "sub": subs.get("YES", "")},
+            {"id": "NO", "name": "No", "sub": subs.get("NO", "")}]
+    if q.get("allow_abstain", True):
+        opts.append({"id": "ABSTAIN", "name": "Abstain", "sub": subs.get("ABSTAIN", "")})
+    return opts
+
+
+_BUBBLE_SVG = ('<svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">'
+               '<ellipse class="ring" cx="22" cy="13" rx="18" ry="9"/>'
+               '<ellipse class="ink" cx="22" cy="13" rx="16.5" ry="7.8"/></svg>')
+
+
+def _opt_button(q, opt, marker_html, role="") -> str:
+    sub = f'<small>{_esc(opt["sub"])}</small>' if opt.get("sub") else (
+        "" if q["type"] == "yesno" else "<small></small>")
+    role_attr = f' role="{role}" aria-checked="false"' if role else ""
+    size = "" if q["type"] == "yesno" else ' style="font-size:1.35rem;"'
+    return (f'<button type="button" class="vk-opt"{role_attr} data-choice="{_esc(opt["id"])}"{size}>'
+            f'{marker_html}<span>{_esc(opt["name"])}{sub}</span></button>')
+
+
+def _question_html(q, n, total) -> str:
+    """One question: optional section banner, measure block, options group."""
+    out = []
+    sect = q.get("section")
+    if sect:
+        style = int(sect.get("style") or 1)
+        out.append(f'<div class="vk-sect vk-sect-{style}">'
+                   f'<p class="vk-sect-k">{_esc(sect.get("kicker") or "")}</p>'
+                   f'<h3 class="vk-sect-t">{_esc(sect.get("title") or "")}</h3>'
+                   + (f'<p class="vk-sect-s">{sect.get("sub")}</p>' if sect.get("sub") else "")
+                   + "</div>")
+    label = f' &middot; {_esc(q["label"])}' if q.get("label") else ""
+    out.append('<div class="vk-measure"' + (' style="margin-top:20px;"' if n > 1 else "") + ">"
+               f'<p class="vk-measure-no">Question {n} of {total}{label}</p>'
+               f'<p class="vk-measure-q">{_esc(q["title"])}</p>'
+               + "".join(f'<p class="vk-measure-t">{para}</p>' for para in (q.get("text") or []))
+               + "</div>")
+
+    typ, key = q["type"], q["key"]
+    if typ == "yesno":
+        opts = "".join(_opt_button(q, o, _BUBBLE_SVG, role="radio") for o in _yesno_options(q))
+        out.append(f'<div class="vk-opts" role="radiogroup" aria-label="Question {n} — '
+                   f'{_esc(q["title"])}" data-q="{key}" data-type="single">{opts}</div>')
+    elif typ == "ranked":
+        options = list(q["options"])
+        if q.get("shuffle"):
+            random.shuffle(options)   # no alphabet advantage; fresh per page load
+        if q.get("allow_abstain", True):
+            options = options + [{"id": "ABSTAIN", "name": "Abstain", "sub": "Skip this question"}]
+        marker = '<span class="vk-rankn" aria-hidden="true"></span>'
+        opts = "".join(_opt_button(q, o, marker) for o in options)
+        out.append(f'<div class="vk-opts" aria-label="Question {n} — {_esc(q["title"])}, ranked" '
+                   f'data-q="{key}" data-type="rank">{opts}</div>')
+        out.append(f'<p class="vk-rank-hint"><span id="hint-{key}" aria-live="polite">'
+                   'No preferences ranked yet.</span>'
+                   f'<button type="button" class="vk-rank-clear" data-clear="{key}">'
+                   'Clear rankings</button></p>')
+    elif typ == "multi":
+        options = list(q["options"])
+        if q.get("allow_abstain", True):
+            options = options + [{"id": "ABSTAIN", "name": "Abstain",
+                                  "sub": q.get("abstain_sub", "")}]
+        marker = '<span class="vk-checkbox" aria-hidden="true">✓</span>'
+        opts = "".join(_opt_button(q, o, marker, role="checkbox") for o in options)
+        out.append(f'<div class="vk-opts" aria-label="Question {n} — {_esc(q["title"])}" '
+                   f'data-q="{key}" data-type="multi">{opts}</div>')
+    elif typ == "text":
+        mx = q.get("max", TEXT_MAX_DEFAULT)
+        out.append(f'<label class="vk-label" for="txt-{key}">Your answer (optional, '
+                   f'{mx:,} characters max)</label>'
+                   f'<textarea class="vk-input" id="txt-{key}" maxlength="{mx}" '
+                   'placeholder="In your own words…"></textarea>')
+    return "".join(out)
+
+
+def _disclosure_html(cfg) -> str:
+    """Visibility disclosure shown above question 1 (decided policy)."""
+    if secret_keys(cfg):
+        return ('<div class="vk-warn"><b class="vk-warn-t">How your votes are seen</b>'
+                'Named questions on this ballot are recorded by name — election '
+                'administrators and your chapter can see how each member voted. '
+                '<b>Questions marked as a secret ballot (such as convention delegates) '
+                'are different</b>: your ranking is stored without your name or chapter; '
+                'only election administrators can access those ballots, solely for '
+                'troubleshooting. National does not publish your chapter’s results '
+                '— your chapter decides whether to publish its results, including '
+                'how members voted (never secret-ballot rankings).</div>')
+    return ('<div class="vk-warn"><b class="vk-warn-t">How your votes are seen</b>'
+            'Votes on this ballot are recorded by name — election administrators '
+            'and your chapter can see how each member voted. National does not publish '
+            'your chapter’s results — your chapter decides whether to publish '
+            'its own.</div>')
 
 
 def render_ballot(poll_id: str, cfg: dict, code: str = "") -> str:
-    q7 = cfg["q7"]
-    shuffled = list(q7["candidates"])
-    random.shuffle(shuffled)          # random order per page load — no alphabet advantage
-    opts = "".join(_q7_option_html(cid, name) for cid, name in shuffled)
-    opts += _q7_option_html("ABSTAIN", "Abstain<small>Skip this question</small>")
-    real = (f"At the national convention {cfg['name']} elects {q7['real_delegates']} "
-            f"delegates and {q7['real_alternates']} alternates (2025 apportionment, "
-            f"1:60 and 1:10). ") if q7["real_delegates"] else ""
-    total = q7["seats"] + q7["alternates"]
-    q7_note = (real + f"<b>How this is counted (two-count method):</b> delegates are "
-               f"decided by a Scottish STV count for {q7['seats']} seats. The same "
-               f"ballots are then recounted for {total} seats \u2014 anyone elected in "
-               "the recount who is not already a delegate becomes an alternate, in "
-               "order of election. Every preference you rank can matter in both "
-               "counts, so rank as many candidates as you like (a first choice is "
-               "required) \u2014 or tap Abstain to skip. Candidates appear in random "
-               "order, freshly shuffled for each voter. Ranks past the first "
-               f"{q7['seats']} turn black \u2014 those preferences still count and "
-               "help decide the alternates.")
-    names = {cid: name for cid, name in q7["candidates"]}
-    names["ABSTAIN"] = "Abstain"
+    questions = poll_questions(cfg)
+    total = len(questions)
+    parts = [_disclosure_html(cfg)]
+    qdef = []
+    for i, q in enumerate(questions):
+        parts.append(_question_html(q, i + 1, total))
+        names = {}
+        if q["type"] == "yesno":
+            names = {o["id"]: o["name"] for o in _yesno_options(q)}
+        elif q["type"] in ("ranked", "multi"):
+            names = {o["id"]: o["name"] for o in q["options"]}
+            names.setdefault("ABSTAIN", "Abstain")
+        qdef.append({"key": q["key"], "type": q["type"], "n": i + 1,
+                     "title": q["title"], "names": names,
+                     "seats": q.get("seats", 0) if q.get("alternates") else 0,
+                     "required": q.get("required", q["type"] in ("yesno", "ranked"))})
+
     html = TEMPLATE.replace("__POLL_ID__", poll_id)
     html = html.replace("__CHAPTER_NAME__", cfg["name"])
     from urllib.parse import quote
     html = html.replace("__HELP_SUBJECT__", quote(f"[BALLOT26] {cfg['name']} — Can't find my code"))
-    html = html.replace("__Q6_QUESTION__", cfg["q6"])
-    html = html.replace("__Q8_QUESTION__", cfg["q8"])
-    html = html.replace("__Q7_OPTIONS__", opts)
-    html = html.replace("__Q7_NOTE__", q7_note)
-    html = html.replace("__Q7_SEATS__", str(q7["seats"]))
-    alts = q7["alternates"]
-    html = html.replace("__Q7_SEATS_N__", str(q7["seats"]))
-    html = html.replace("__Q7_ALTS__", f"{alts} alternate" + ("" if alts == 1 else "s"))
-    html = html.replace("__Q7_NAMES__", json.dumps(names))
+    html = html.replace("__QUESTIONS_HTML__", "".join(parts))
+    html = html.replace("__QDEF__", json.dumps(qdef))
+    html = html.replace("__N_Q__", str(total))
     html = html.replace("__CODE__", code if CODE_RE.match(code or "") else "")
     return html
 
@@ -328,57 +548,68 @@ def _claim_code(txn, codes_coll, ch: str):
     return {"member_id": d.get("member_id"), "chapter": d.get("chapter")}
 
 
-def cast_vote(poll_id: str, code_plaintext: str, answers: dict, comment: str) -> dict:
+def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
+                       comments: dict, identity: dict, code_h):
+    """Write the main (identity-linked) record and, when the ballot has
+    secret questions, the separate secret-ballot record. Shared by coded
+    votes and provisional promotion so the storage split can't drift."""
+    skeys = set(secret_keys(cfg))
+    main_answers = {k: v for k, v in answers.items() if k not in skeys}
+    nonce = secrets.token_hex(8)
+    ac = canon_answers(main_answers)
+    rh = make_record_hash(receipt, ac, nonce)
+    db.collection(f"{poll_id}__ballots").document(rh).set({
+        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
+        "nonce": nonce, "record_hash": rh,
+        "code_hash": code_h,
+        "comment": comments.get("text", ""),   # legacy field for older tools
+        "comments": comments,
+        "day_bucket": firestore.SERVER_TIMESTAMP,
+        **identity,
+    })
+    if skeys:
+        dq = {k: (answers.get(k) or []) for k in sorted(skeys)}
+        dnonce = secrets.token_hex(8)
+        dcanon = canon_answers(dq)
+        drh = make_record_hash(receipt, dcanon, dnonce)
+        db.collection(f"{poll_id}__delegate_ballots").document(drh).set({
+            "receipt": receipt, **dq, "answers_canon": dcanon,
+            "nonce": dnonce, "record_hash": drh,
+            "code_hash": code_h,   # ADMIN-ONLY troubleshooting trace — never chapter-visible
+            "day_bucket": firestore.SERVER_TIMESTAMP,
+            **({"provisional": True} if identity.get("provisional") else {}),
+        })
+    return rh
+
+
+def cast_vote(poll_id: str, cfg: dict, code_plaintext: str, answers: dict,
+              comments: dict) -> dict:
     """HYBRID VISIBILITY MODEL:
-    * Poll questions + local issues ({poll}__ballots): identity-linked
-      (member_id, chapter, code_hash) — visible to election administrators and
-      the voter's chapter. Results not published publicly.
-    * DELEGATE ranking ({poll}__delegate_ballots): SECRET BALLOT per Const.
-      Art. V §5 — stored separately with NO member_id and NO chapter identity.
-      The collection is ADMIN-ONLY; it retains the code_hash solely so an
-      election administrator can trace a specific ballot for troubleshooting
-      (via the codes collection). Chapters never get access to this collection
-      or the code mapping. Admin access must be IAM-restricted + audit-logged.
+    * Named questions ({poll}__ballots): identity-linked (member_id, chapter,
+      code_hash) — visible to election administrators and the voter's
+      chapter. Results not published publicly.
+    * SECRET questions ({poll}__delegate_ballots — delegate elections per
+      Const. Art. V §5, or any question flagged secret): stored separately
+      with NO member_id and NO chapter identity. The collection is
+      ADMIN-ONLY; it retains the code_hash solely so an election
+      administrator can trace a specific ballot for troubleshooting (via the
+      codes collection). Chapters never get access to this collection or the
+      code mapping. Admin access must be IAM-restricted + audit-logged.
     Voters are told all of this on the ballot before voting."""
     codes = db.collection(f"{poll_id}__codes")
-    ballots = db.collection(f"{poll_id}__ballots")
     ch = code_hash(code_plaintext)
     txn = db.transaction()
     claim = _claim_code(txn, codes, ch)
     if claim is None:
         return {"status": "already_voted"}
     receipt = secrets.token_hex(4).upper()
-
-    # identity-linked record: everything EXCEPT the delegate ranking
-    main_answers = {k: v for k, v in answers.items() if k != "q7"}
-    nonce = secrets.token_hex(8)
-    ac = canon_answers(main_answers)
-    rh = make_record_hash(receipt, ac, nonce)
-    ballots.document(rh).set({
-        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
-        "nonce": nonce, "record_hash": rh,
-        "member_id": claim.get("member_id"),
-        "chapter": claim.get("chapter"),
-        "code_hash": ch,
-        "comment": comment,
-        "day_bucket": firestore.SERVER_TIMESTAMP,
-    })
-
-    # secret delegate ballot: same receipt (voter verification), no identity
-    dq = {"q7": answers.get("q7") or []}
-    dnonce = secrets.token_hex(8)
-    dcanon = canon_answers(dq)
-    drh = make_record_hash(receipt, dcanon, dnonce)
-    db.collection(f"{poll_id}__delegate_ballots").document(drh).set({
-        "receipt": receipt, "q7": dq["q7"], "answers_canon": dcanon,
-        "nonce": dnonce, "record_hash": drh,
-        "code_hash": ch,   # ADMIN-ONLY troubleshooting trace — never chapter-visible
-        "day_bucket": firestore.SERVER_TIMESTAMP,
-    })
+    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
+                       {"member_id": claim.get("member_id"),
+                        "chapter": claim.get("chapter")}, ch)
     return {"status": "recorded", "receipt": receipt}
 
 
-def cast_provisional(poll_id: str, answers: dict, comment: str, info: dict) -> dict:
+def cast_provisional(poll_id: str, answers: dict, comments: dict, info: dict) -> dict:
     """Sealed provisional ballot: stored separately, NOT counted, no code used.
     Adjudicated by staff against membership after the fact. (Identity-linked
     by design until adjudication, so the comment lives with it.)"""
@@ -386,7 +617,8 @@ def cast_provisional(poll_id: str, answers: dict, comment: str, info: dict) -> d
     receipt = "P" + secrets.token_hex(4).upper()[:7]
     prov.document(receipt).set({
         "receipt": receipt,
-        "answers": answers, "comment": comment,   # sealed; not in tally until verified
+        "answers": answers, "comments": comments,
+        "comment": comments.get("text", ""),      # sealed; not in tally until verified
         "first": info.get("first", ""), "last": info.get("last", ""),
         "emails": (info.get("emails", "") or "").lower(),   # all emails, free text
         "phones": info.get("phones", ""),                    # all phones, free text
@@ -441,23 +673,27 @@ def vote(poll_id):
         return jsonify({"error": "unknown_poll"}), 404
     st = window_state(cfg)
     if st == "not_open":
-        return jsonify({"error": "not_open", "message": f"Voting has not opened for {cfg['name']}."}), 403
+        return jsonify({"error": "not_open", "message": f"Voting for {cfg['name']} opens "
+                        f"{fmt_local(cfg.get('opens_at'), cfg)}."}), 403
     if st == "closed":
-        return jsonify({"error": "closed", "message": f"Voting has closed for {cfg['name']}."}), 403
+        closed_msg = (f"Voting has closed for {cfg['name']}"
+                      + (f" (closed {fmt_local(cfg['closes_at'], cfg)})"
+                         if cfg.get("closes_at") else "") + ".")
+        return jsonify({"error": "closed", "message": closed_msg}), 403
 
     data = request.get_json(silent=True) or {}
     code = data.get("code", "")
     if not CODE_RE.match(code):
         return jsonify({"error": "invalid_code_format"}), 400
     try:
-        answers, comment = validate_answers(data.get("answers"), cfg)
+        answers, comments = validate_answers(data.get("answers"), cfg)
     except ValueError as bad:
         return jsonify({"error": "invalid_answers", "field": str(bad)}), 400
     if code == cfg.get("test_code"):
         # repeatable test vote: full UX (receipt + confirmation), nothing stored
         return jsonify({"status": "recorded", "receipt": "TEST-" + secrets.token_hex(3).upper()}), 200
     try:
-        result = cast_vote(poll_id, code, answers, comment)
+        result = cast_vote(poll_id, cfg, code, answers, comments)
     except LookupError:
         return jsonify({"error": "invalid_code"}), 404
     except gcloud_exc.Aborted:
@@ -477,14 +713,14 @@ def provisional(poll_id):
     data = request.get_json(silent=True) or {}
     info = data.get("info", {}) or {}
     try:
-        answers, comment = validate_answers(data.get("answers"), cfg)
+        answers, comments = validate_answers(data.get("answers"), cfg)
     except ValueError as bad:
         return jsonify({"error": "invalid_answers", "field": str(bad)}), 400
     if not info.get("first") or not info.get("last") or not info.get("chapter"):
         return jsonify({"error": "missing_info"}), 400
     if not re.search(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", info.get("emails", "")):
         return jsonify({"error": "missing_info", "field": "emails"}), 400
-    return jsonify(cast_provisional(poll_id, answers, comment, info)), 200
+    return jsonify(cast_provisional(poll_id, answers, comments, info)), 200
 
 
 SPLASH = """<!doctype html><html lang="en"><head>
@@ -928,11 +1164,140 @@ def _months_before(d: date, months: int) -> date:
     return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
 
 
+def _parse_when(body, key, tzinfo, errors):
+    """Window bound: unix seconds, or a naive 'YYYY-MM-DDTHH:MM' interpreted
+    in the poll's timezone."""
+    v = body.get(key)
+    if v in (None, ""):
+        return None
+    if isinstance(v, (int, float)) or (isinstance(v, str) and v.isdigit()):
+        return int(v)
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(v)).replace(tzinfo=tzinfo).timestamp())
+    except ValueError:
+        errors.append(f"{key} must be unix seconds or YYYY-MM-DDTHH:MM (poll-local time)")
+        return None
+
+
+QKEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+QUESTION_TYPES = ("yesno", "ranked", "multi", "text")
+
+
+def _validate_questions(qs, errors, warnings):
+    """Validate a generic questions list; returns the normalized list."""
+    if not isinstance(qs, list) or not qs:
+        errors.append("questions must be a non-empty list")
+        return []
+    out, keys = [], set()
+    for i, q in enumerate(qs):
+        if not isinstance(q, dict):
+            errors.append(f"questions[{i}] must be an object")
+            continue
+        key = str(q.get("key") or "").strip()
+        typ = str(q.get("type") or "").strip()
+        title = str(q.get("title") or "").strip()
+        if not QKEY_RE.match(key):
+            errors.append(f"questions[{i}]: key must match [a-z][a-z0-9_]{{0,31}}")
+            continue
+        if key in keys:
+            errors.append(f"duplicate question key {key!r}")
+            continue
+        keys.add(key)
+        if typ not in QUESTION_TYPES:
+            errors.append(f"question {key!r}: type must be one of {QUESTION_TYPES}")
+            continue
+        if not title:
+            errors.append(f"question {key!r}: title is required")
+        nq = {"key": key, "type": typ, "title": title}
+        if q.get("label"):
+            nq["label"] = str(q["label"])
+        text = q.get("text")
+        if text:
+            nq["text"] = [str(p) for p in text] if isinstance(text, list) else [str(text)]
+        sect = q.get("section")
+        if isinstance(sect, dict):
+            nq["section"] = {"style": int(sect.get("style") or 1),
+                             "kicker": str(sect.get("kicker") or ""),
+                             "title": str(sect.get("title") or ""),
+                             "sub": str(sect.get("sub") or "")}
+        if "allow_abstain" in q:
+            nq["allow_abstain"] = bool(q["allow_abstain"])
+        if "required" in q:
+            nq["required"] = bool(q["required"])
+
+        if typ in ("ranked", "multi"):
+            opts, seen = [], set()
+            for c in (q.get("options") or []):
+                cid = str((c.get("id") if isinstance(c, dict) else c[0]) or "").strip().upper()
+                cname = str((c.get("name") if isinstance(c, dict) else c[1]) or "").strip()
+                sub = str((c.get("sub") or "") if isinstance(c, dict) else "")
+                if not CAND_ID_RE.match(cid) or cid == "ABSTAIN":
+                    errors.append(f"question {key!r}: bad option id {cid!r} "
+                                  "([A-Z0-9_]{2,32}, ABSTAIN reserved)")
+                elif cid in seen:
+                    errors.append(f"question {key!r}: duplicate option id {cid!r}")
+                elif not cname:
+                    errors.append(f"question {key!r}: option {cid!r} needs a display name")
+                else:
+                    seen.add(cid)
+                    opts.append({"id": cid, "name": cname, "sub": sub})
+            if not opts:
+                errors.append(f"question {key!r}: needs at least one option")
+            nq["options"] = opts
+            if q.get("abstain_sub"):
+                nq["abstain_sub"] = str(q["abstain_sub"])
+        if typ == "ranked":
+            def _n(field, default, minimum):
+                try:
+                    v = int(q.get(field, default))
+                except (TypeError, ValueError):
+                    v = minimum - 1
+                if v < minimum:
+                    errors.append(f"question {key!r}: {field} must be an integer ≥ {minimum}")
+                return max(v, minimum)
+            nq["seats"] = _n("seats", 1, 1)
+            nq["alternates"] = _n("alternates", 0, 0)
+            nq["secret"] = bool(q.get("secret")) or bool(q.get("delegate"))
+            nq["delegate"] = bool(q.get("delegate"))
+            nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
+            for f in ("real_delegates", "real_alternates"):
+                if q.get(f):
+                    nq[f] = int(q[f])
+            if nq["options"] and len(nq["options"]) <= nq["seats"] + nq["alternates"]:
+                warnings.append(f"question {key!r} uncontested: {len(nq['options'])} "
+                                f"option(s) for {nq['seats']} seat(s) + "
+                                f"{nq['alternates']} alternate(s)")
+        elif typ == "text":
+            try:
+                mx = int(q.get("max", TEXT_MAX_DEFAULT))
+            except (TypeError, ValueError):
+                mx = 0
+            if not 1 <= mx <= 10000:
+                errors.append(f"question {key!r}: max must be between 1 and 10000")
+                mx = TEXT_MAX_DEFAULT
+            nq["max"] = mx
+        elif typ == "yesno" and isinstance(q.get("option_subs"), dict):
+            nq["option_subs"] = {str(k).upper(): str(v)
+                                 for k, v in q["option_subs"].items()}
+        out.append(nq)
+    return out
+
+
 def validate_poll_config(poll_id: str, body: dict):
     """Election-builder validation. Returns (normalized_cfg, errors, warnings).
-    Art. V §5 is enforced structurally: when a convention date is given, the
-    whole voting window must sit inside [convention − 4 months,
-    convention − 45 days] and apportionment must be confirmed done."""
+
+    Ballots are either a generic `questions` list (any mix of yesno / ranked /
+    multi / text — standalone referendums, officer elections, full combined
+    ballots) or the legacy combined-demo shape (q6/q8/q7 fields).
+
+    Art. V §5 is enforced structurally for DELEGATE elections (a ranked
+    question flagged delegate:true, or the legacy demo ballot): when a
+    convention date is given, the whole voting window must sit inside
+    [convention − 4 months, convention − 45 days] (dates in the poll's own
+    timezone) and apportionment must be confirmed done. convention_date is
+    optional — without it, delegate polls get a warning, everything else
+    validates silently."""
     errors, warnings = [], []
     if not POLL_ID_RE.match(poll_id or ""):
         errors.append("poll_id must match [a-z0-9_]{3,64}")
@@ -940,59 +1305,72 @@ def validate_poll_config(poll_id: str, body: dict):
     name = str(body.get("name") or "").strip()
     if not name:
         errors.append("name is required")
-    q6 = str(body.get("q6") or "").strip()
-    q8 = str(body.get("q8") or "").strip()
-    if not q6 or not q8:
-        errors.append("both local-issue questions (q6, q8) are required")
     test_code = str(body.get("test_code") or "").strip()
     if test_code and not CODE_RE.match(test_code):
         errors.append("test_code must match [A-Za-z0-9_-]{12,64}")
 
-    def ts(key):
-        v = body.get(key)
-        if v in (None, ""):
-            return None
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            errors.append(f"{key} must be unix seconds")
-            return None
-    opens_at, closes_at = ts("opens_at"), ts("closes_at")
+    tz_name = str(body.get("timezone") or "America/New_York").strip()
+    from zoneinfo import ZoneInfo
+    try:
+        tzinfo = ZoneInfo(tz_name)
+    except Exception:
+        errors.append(f"unknown timezone {tz_name!r} (use an IANA name like America/Chicago)")
+        tzinfo = ZoneInfo("America/New_York")
+
+    opens_at = _parse_when(body, "opens_at", tzinfo, errors)
+    closes_at = _parse_when(body, "closes_at", tzinfo, errors)
     if opens_at and closes_at and opens_at >= closes_at:
         errors.append("opens_at must be before closes_at")
 
-    q7in = body.get("q7") or {}
-    def n(key, minimum):
-        try:
-            v = int(q7in.get(key, 0))
-        except (TypeError, ValueError):
-            v = -1
-        if v < minimum:
-            errors.append(f"q7.{key} must be an integer ≥ {minimum}")
-        return max(v, 0)
-    seats = n("seats", 1)
-    alternates = n("alternates", 0)
-    real_delegates = n("real_delegates", 0)
-    real_alternates = n("real_alternates", 0)
+    questions = None
+    legacy = {}
+    if body.get("questions") is not None:
+        questions = _validate_questions(body.get("questions"), errors, warnings)
+        has_delegate = any(q.get("delegate") for q in questions)
+    else:
+        # legacy combined-demo shape: shared questions + q6/q8/q7 chapter fields
+        has_delegate = True
+        q6 = str(body.get("q6") or "").strip()
+        q8 = str(body.get("q8") or "").strip()
+        if not q6 or not q8:
+            errors.append("both local-issue questions (q6, q8) are required")
+        q7in = body.get("q7") or {}
 
-    cands, seen = [], set()
-    for c in (q7in.get("candidates") or []):
-        cid = str((c.get("id") if isinstance(c, dict) else c[0]) or "").strip().upper()
-        cname = str((c.get("name") if isinstance(c, dict) else c[1]) or "").strip()
-        if not CAND_ID_RE.match(cid) or cid == "ABSTAIN":
-            errors.append(f"bad candidate id {cid!r} ([A-Z0-9_]{{2,32}}, ABSTAIN reserved)")
-        elif cid in seen:
-            errors.append(f"duplicate candidate id {cid!r}")
-        elif not cname:
-            errors.append(f"candidate {cid!r} needs a display name")
-        else:
-            seen.add(cid)
-            cands.append((cid, cname))
-    if not cands:
-        errors.append("q7 needs at least one candidate")
-    elif len(cands) <= seats + alternates:
-        warnings.append(f"uncontested: {len(cands)} candidate(s) for "
-                        f"{seats} seat(s) + {alternates} alternate(s)")
+        def n(key, minimum):
+            try:
+                v = int(q7in.get(key, 0))
+            except (TypeError, ValueError):
+                v = -1
+            if v < minimum:
+                errors.append(f"q7.{key} must be an integer ≥ {minimum}")
+            return max(v, 0)
+        seats = n("seats", 1)
+        alternates = n("alternates", 0)
+        real_delegates = n("real_delegates", 0)
+        real_alternates = n("real_alternates", 0)
+
+        cands, seen = [], set()
+        for c in (q7in.get("candidates") or []):
+            cid = str((c.get("id") if isinstance(c, dict) else c[0]) or "").strip().upper()
+            cname = str((c.get("name") if isinstance(c, dict) else c[1]) or "").strip()
+            if not CAND_ID_RE.match(cid) or cid == "ABSTAIN":
+                errors.append(f"bad candidate id {cid!r} ([A-Z0-9_]{{2,32}}, ABSTAIN reserved)")
+            elif cid in seen:
+                errors.append(f"duplicate candidate id {cid!r}")
+            elif not cname:
+                errors.append(f"candidate {cid!r} needs a display name")
+            else:
+                seen.add(cid)
+                cands.append((cid, cname))
+        if not cands:
+            errors.append("q7 needs at least one candidate")
+        elif len(cands) <= seats + alternates:
+            warnings.append(f"uncontested: {len(cands)} candidate(s) for "
+                            f"{seats} seat(s) + {alternates} alternate(s)")
+        legacy = {"q6": q6, "q8": q8,
+                  "q7": {"seats": seats, "alternates": alternates,
+                         "real_delegates": real_delegates,
+                         "real_alternates": real_alternates, "candidates": cands}}
 
     conv_raw = str(body.get("convention_date") or "").strip()
     apportioned = bool(body.get("apportionment_done"))
@@ -1008,27 +1386,30 @@ def validate_poll_config(poll_id: str, body: dict):
             if not (opens_at and closes_at):
                 errors.append("Art. V: a delegate election needs an explicit voting window")
             else:
+                from datetime import datetime
                 earliest = _months_before(conv, ART5_MAX_MONTHS)
                 latest = conv - timedelta(days=ART5_MIN_DAYS)
-                w_open = date.fromtimestamp(opens_at)
-                w_close = date.fromtimestamp(closes_at)
+                w_open = datetime.fromtimestamp(opens_at, tzinfo).date()
+                w_close = datetime.fromtimestamp(closes_at, tzinfo).date()
                 if w_open < earliest:
                     errors.append(f"Art. V: opens {w_open}, but no earlier than "
                                   f"{earliest} (4 months before convention)")
                 if w_close > latest:
                     errors.append(f"Art. V: closes {w_close}, but no later than "
                                   f"{latest} (45 days before convention)")
-    else:
+    elif has_delegate:
         warnings.append("no convention_date — Art. V delegate-window validation skipped")
 
     cfg = {
         "name": name, "opens_at": opens_at, "closes_at": closes_at,
-        "test_code": test_code or None, "q6": q6, "q8": q8,
+        "timezone": tz_name,
+        "test_code": test_code or None,
         "convention_date": conv_raw or None, "apportionment_done": apportioned,
-        "q7": {"seats": seats, "alternates": alternates,
-               "real_delegates": real_delegates, "real_alternates": real_alternates,
-               "candidates": cands},
     }
+    if questions is not None:
+        cfg["questions"] = questions
+    else:
+        cfg.update(legacy)
     return cfg, errors, warnings
 
 
@@ -1063,15 +1444,32 @@ def admin_list_polls():
 
 @app.post("/admin/api/polls/<poll_id>")
 def admin_save_poll(poll_id):
-    """Create or update a poll config (national admins only)."""
+    """Create or update a poll config (national admins only).
+
+    A FINALIZED poll cannot be edited — and therefore cannot reopen — unless
+    the request explicitly sets unfinalize:true. Reopening a certified
+    election is a deliberate, audited act, never a side effect of an edit."""
     ident = require_admin(national_only=True)
     if not ident:
         return jsonify({"error": "forbidden"}), 403
-    cfg, errors, warnings = validate_poll_config(poll_id, request.get_json(silent=True) or {})
+    body = request.get_json(silent=True) or {}
+    try:
+        snap = db.collection(CONFIG_COLL).document(poll_id).get()
+        existing = snap.to_dict() if getattr(snap, "exists", False) else None
+    except Exception:
+        existing = None
+    unfinalize = bool(body.get("unfinalize"))
+    if existing and existing.get("finalized") and not unfinalize:
+        return jsonify({"error": "finalized",
+                        "message": "This poll is finalized. Pass unfinalize:true "
+                                   "to deliberately reopen it (audited)."}), 409
+    cfg, errors, warnings = validate_poll_config(poll_id, body)
     if errors:
         return jsonify({"error": "invalid_config", "errors": errors,
                         "warnings": warnings}), 400
     db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
+    if existing and existing.get("finalized") and unfinalize:
+        _audit(poll_id, "unfinalize_reopen", ident["name"])
     _audit(poll_id, "config_save", ident["name"])
     load_polls(force=True)
     return jsonify({"ok": True, "warnings": warnings}), 200
@@ -1156,7 +1554,8 @@ def admin_adjudicate_provisional(poll_id, receipt):
     ident = require_admin(poll_id)
     if not ident:
         return jsonify({"error": "forbidden"}), 403
-    if not chapter_or_none(poll_id):
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
         return jsonify({"error": "unknown_poll"}), 404
     data = request.get_json(silent=True) or {}
     action = data.get("action")
@@ -1191,31 +1590,13 @@ def admin_adjudicate_provisional(poll_id, receipt):
     for c in member_codes:
         c.reference.update({"used": True, "burned_by": "provisional_adjudication"})
 
-    # promote the sealed answers into the real collections, same split as
-    # cast_vote: identity-linked main record (no q7) + secret delegate ballot.
+    # promote the sealed answers into the real collections — same
+    # identity-linked / secret split as a coded vote.
     answers = prov.get("answers") or {}
-    main_answers = {k: v for k, v in answers.items() if k != "q7"}
-    nonce = secrets.token_hex(8)
-    ac = canon_answers(main_answers)
-    rh = make_record_hash(receipt, ac, nonce)
-    db.collection(f"{poll_id}__ballots").document(rh).set({
-        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
-        "nonce": nonce, "record_hash": rh,
-        "member_id": member_id, "chapter": prov.get("chapter"),
-        "code_hash": None, "provisional": True,
-        "comment": prov.get("comment", ""),
-        "day_bucket": firestore.SERVER_TIMESTAMP,
-    })
-    dq = {"q7": answers.get("q7") or []}
-    dnonce = secrets.token_hex(8)
-    dcanon = canon_answers(dq)
-    drh = make_record_hash(receipt, dcanon, dnonce)
-    db.collection(f"{poll_id}__delegate_ballots").document(drh).set({
-        "receipt": receipt, "q7": dq["q7"], "answers_canon": dcanon,
-        "nonce": dnonce, "record_hash": drh,
-        "code_hash": None, "provisional": True,
-        "day_bucket": firestore.SERVER_TIMESTAMP,
-    })
+    comments = prov.get("comments") or ({"text": prov["comment"]} if prov.get("comment") else {})
+    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
+                       {"member_id": member_id, "chapter": prov.get("chapter"),
+                        "provisional": True}, None)
     ref.update({"status": "verified", "member_id": member_id,
                 "adjudicated_by": ident["name"], "adjudicated_at": firestore.SERVER_TIMESTAMP})
     _audit(poll_id, "provisional_verify", ident["name"], receipt=receipt, member_id=member_id)

@@ -275,4 +275,63 @@ ok(cfg_doc.get("finalized") and "final_counts" in cfg_doc, "final counts snapsho
 r = c.post("/admin/api/cron/closeout", headers=hdr)
 ok(r.get_json()["finalized"] == {}, "closeout idempotent")
 
+# ---- generalized ballots: schema questions, timezones, finalize guard ----
+from zoneinfo import ZoneInfo  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+CUSTOM_QS = [
+    {"key": "measure", "type": "yesno", "title": "Shall the chapter fund a mutual aid pantry?"},
+    {"key": "officer", "type": "ranked", "title": "Elect the co-chairs", "seats": 2,
+     "secret": True,
+     "options": [{"id": "A1", "name": "Alice"}, {"id": "B2", "name": "Bha"},
+                 {"id": "C3", "name": "Cruz"}]},
+    {"key": "why", "type": "text", "title": "Tell us why", "max": 200},
+]
+r = c.post("/admin/api/polls/special_ref", headers=hdr, json={
+    "name": "Special Referendum", "timezone": "America/Chicago",
+    "opens_at": "2020-01-01T00:00", "closes_at": "2099-01-01T00:00",
+    "questions": CUSTOM_QS})
+ok(r.status_code == 200 and r.get_json()["warnings"] == [],
+   "custom poll saves; no Art. V warning without a delegate question")
+cfg_doc = DOCS[("config__polls", "special_ref")]
+expected_open = int(datetime(2020, 1, 1, 0, 0, tzinfo=ZoneInfo("America/Chicago")).timestamp())
+ok(cfg_doc["opens_at"] == expected_open and cfg_doc["timezone"] == "America/Chicago",
+   "window parsed in the poll's timezone")
+
+page2 = c.get("/p/special_ref/").data.decode()
+ok(all(x in page2 for x in ["Question 1 of 3", "mutual aid pantry", "Alice", "Tell us why"]),
+   "schema ballot renders all question types")
+
+before_w = len(WRITES)
+r = c.post("/p/special_ref/vote", json={"code": "B" * 16, "answers": {
+    "measure": "YES", "officer": ["A1", "C3"], "why": "more pantries"}})
+ok(r.status_code == 200 and r.get_json()["status"] == "recorded", "custom ballot vote accepted")
+cm = next(d for coll, d in WRITES[before_w:] if coll == "special_ref__ballots")
+cd = next(d for coll, d in WRITES[before_w:] if coll == "special_ref__delegate_ballots")
+ok(cm["answers"] == {"measure": "YES"} and cm["comments"] == {"why": "more pantries"},
+   "main record: named answers + sealed-from-export text answers")
+ok(cd["officer"] == ["A1", "C3"] and "member_id" not in cd,
+   "secret question stored in the secret collection, no identity")
+ok(c.post("/p/special_ref/vote", json={"code": "B" * 16, "answers": {
+    "measure": "MAYBE", "officer": ["A1"], "why": ""}}).status_code == 400,
+   "bad yesno value 400")
+ok(c.post("/p/special_ref/vote", json={"code": "B" * 16, "answers": {
+    "measure": "NO", "officer": ["ZZ"], "why": ""}}).status_code == 400,
+   "unknown ranked option 400")
+
+# builder schema validation
+bad_qs = [{"key": "dup", "type": "yesno", "title": "A"},
+          {"key": "dup", "type": "yesno", "title": "B"}]
+ok(c.post("/admin/api/polls/special_ref", headers=hdr, json={
+    "name": "X", "questions": bad_qs}).status_code == 400, "duplicate question keys 400")
+
+# finalized polls can't be silently edited/reopened
+chi_body = dict(chi)
+ok(c.post("/admin/api/polls/debs_endorsement__chi", headers=hdr, json=chi_body).status_code == 409,
+   "finalized poll edit refused without unfinalize")
+r = c.post("/admin/api/polls/debs_endorsement__chi", headers=hdr,
+           json=dict(chi_body, unfinalize=True))
+ok(r.status_code == 200 and "finalized" not in DOCS[("config__polls", "debs_endorsement__chi")],
+   "explicit unfinalize reopens (audited)")
+
 print(f"SMOKE TEST: all {passed} checks passed")

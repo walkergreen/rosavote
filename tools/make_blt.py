@@ -193,15 +193,16 @@ def load_answers_from_firestore(project, poll_id):
 
 
 def load_delegate_rankings_from_firestore(project, poll_id):
-    """Delegate rankings live in the SEPARATE secret-ballot collection
-    ({poll}__delegate_ballots) — no identity fields, admin-only access."""
+    """Secret-ballot records ({poll}__delegate_ballots) — no identity fields,
+    admin-only access. Yields the whole answer doc so any secret question key
+    (q7 on the demo ballot, arbitrary keys on schema-built ballots) works."""
     from google.cloud import firestore
     db = firestore.Client(project=project)
     for doc in db.collection(f"{poll_id}__delegate_ballots").stream():
         d = doc.to_dict()
         if d.get("voided"):
             continue
-        yield {"q7": d.get("q7") or []}
+        yield d
 
 
 def load_delegate_rankings_from_csv(path):
@@ -274,6 +275,45 @@ def _write(out_path, contest, lines):
         f.write(f'"{contest["title"]}"\n')
 
 
+def export_from_questions(questions, poll_id, all_answers, secret_rows, out_prefix):
+    """Schema-built ballots: derive every contest from the questions list.
+    yesno -> Yes/No BLT; ranked -> STV BLT (+ alternates recount under the
+    two-count method when alternates>0); multi -> option counts to stdout;
+    text -> skipped (identity-linked comments are never exported)."""
+    for q in questions:
+        key, typ = q["key"], q["type"]
+        rows = secret_rows if q.get("secret") else all_answers
+        title = f"DSA Member Ballot - {poll_id} - {q['title']}"
+        if typ == "yesno":
+            contest = {"candidates": ["YES", "NO"], "labels": {"YES": "Yes", "NO": "No"},
+                       "seats": 1, "title": title}
+            write_yesno(all_answers, key, contest, f"{out_prefix}_{key}.blt")
+        elif typ == "ranked":
+            labels = {o["id"]: o["name"] for o in q["options"]}
+            base = {"candidates": [o["id"] for o in q["options"]], "labels": labels}
+            seats = int(q.get("seats", 1))
+            write_ranked(rows, key, dict(base, seats=seats,
+                         title=f"{title} ({seats} seat(s), Scottish STV)"),
+                         f"{out_prefix}_{key}.blt")
+            alts = int(q.get("alternates", 0))
+            if alts:
+                total = seats + alts
+                write_ranked(rows, key, dict(base, seats=total,
+                             title=f"{title} - ALTERNATES RECOUNT ({total} seats; "
+                                   "alternates = winners here not already elected)"),
+                             f"{out_prefix}_{key}_alternates_recount.blt")
+        elif typ == "multi":
+            counts = {o["id"]: 0 for o in q["options"]}
+            for a in all_answers:
+                for choice in (a.get(key) or []):
+                    if choice in counts:
+                        counts[choice] += 1
+            print(f"{key} (multi-select, not a contest):")
+            for o in q["options"]:
+                print(f"    {o['name']}: {counts[o['id']]}")
+        # text: never exported
+
+
 def main():
     ap = argparse.ArgumentParser()
     src = ap.add_mutually_exclusive_group(required=True)
@@ -285,6 +325,7 @@ def main():
     ap.add_argument("--out-prefix", default="ballot")
     args = ap.parse_args()
 
+    questions = None
     if args.from_csv:
         all_answers = list(load_answers_from_csv(args.from_csv))
         if args.delegates_csv:
@@ -293,12 +334,24 @@ def main():
             delegate_rankings = [a for a in all_answers if a.get("q7")]
     else:
         try:
+            from google.cloud import firestore
+            snap = (firestore.Client(project=args.project)
+                    .collection("config__polls").document(args.poll_id).get())
+            if snap.exists:
+                questions = (snap.to_dict() or {}).get("questions")
             refresh_registry_from_firestore(args.project)
         except Exception as e:
             print(f"note: using built-in contest registry (config__polls unavailable: {e})")
         all_answers = list(load_answers_from_firestore(args.project, args.poll_id))
         delegate_rankings = list(load_delegate_rankings_from_firestore(args.project, args.poll_id))
 
+    if questions:
+        # schema-built ballot: contests come straight from the poll config
+        export_from_questions(questions, args.poll_id, all_answers,
+                              delegate_rankings, args.out_prefix)
+        return
+
+    # legacy combined-demo ballot
     write_q1(all_answers, f"{args.out_prefix}_q1.blt")
     write_ranked(all_answers, "q2", Q2, f"{args.out_prefix}_q2.blt")
     write_ranked(all_answers, "q3", Q3, f"{args.out_prefix}_q3.blt")

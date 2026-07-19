@@ -67,18 +67,36 @@ gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
   `referendum_handoff_spec.md` (the ORIGINAL spec — parts are now stale; this
   file supersedes it where they conflict).
 
-## The ballot (8 questions, 3 sections, one page)
+## Ballots are SCHEMA-DRIVEN (any election shape)
 
-Section 1 "Chapter Poll" (red): Q1 Debs endorsement Y/N/A · Q2 campaign
-structure (ranked STV) · Q3 the 1912 field (ranked STV) · Q4 pledges
-(multi + exclusive Abstain) · Q5 free-text comment.
-Section 2 "Convention Delegates" (black): delegate election, ranked STV.
-Section 3 "Local Issues" (tan): two chapter-specific Y/N/A questions.
+A poll's config may carry a `questions` list — ordered, any mix of types:
+`yesno` (Y/N + optional Abstain) · `ranked` (Scottish STV; options, seats,
+alternates>0 ⇒ two-count method + over-seat black styling; `secret` ⇒ stored
+in the admin-only secret collection; `delegate` ⇒ additionally Art. V rules;
+`shuffle` ⇒ random option order per load) · `multi` (optional multi-select,
+exclusive Abstain) · `text` (free text; stored as identity-linked comment,
+never in canonical answers). Rendering (`_question_html`), validation
+(`validate_answers`), storage split (`_write_ballot_docs`), the console
+builder (JSON editor + presets), and `make_blt.py --from-firestore` are all
+driven by this schema. Standalone referendums and officer elections need no
+convention date; Art. V validation applies only when a `delegate:true`
+question exists.
 
-**CRITICAL KEY↔DISPLAY MAPPING** (keys are stable for tools; display moved):
+Configs WITHOUT `questions` (the CHAPTERS seed, early docs) get
+`demo_questions()`: the original combined 8-question ballot expressed in the
+schema — Section 1 "Chapter Poll" (q1 Debs Y/N/A, q2/q3 ranked, pledges
+multi, text comment), Section 2 "Convention Delegates" (q7, secret+delegate),
+Section 3 "Local Issues" (q6, q8).
+
+**LEGACY KEY↔DISPLAY MAPPING** (demo ballot only; keys stable for tools):
 `q1,q2,q3,pledges,text` = display Q1–Q5 · **`q7` = delegates = display Q6** ·
 **`q6` = local issue 1 = display Q7** · **`q8` = local issue 2 = display Q8**.
 Do not "fix" this by renaming keys — Firestore data and tools reference them.
+
+Windows: `timezone` (IANA, default America/New_York) — builder datetimes are
+poll-local; Art. V date math uses the poll tz. `finalized` polls reject votes
+regardless of window and refuse builder edits without an explicit
+`unfinalize:true` (audited).
 
 ## Data model (Firestore, per poll_id)
 
