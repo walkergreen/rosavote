@@ -1,38 +1,77 @@
+#!/usr/bin/env python3
 """
-Code generation + distribution-manifest builder for the referendum.
+Code generation + distribution-manifest builder, wired to the real roll:
+`proj-tmc-mem-dsa.main.ak_primary_id` (deduplicated primary-AKID mapping)
+joined to `ak_user_fields_pivoted` for chapter assignment.
 
-Run ONCE, before voting opens, against the frozen membership roll. Produces:
-  1. Firestore code documents (hashed) per member, scoped by chapter poll_id.
-  2. A distribution manifest (CSV) your SMS/email platform consumes: one row
-     per member with their personalized tap-to-vote link on their BEST single
-     channel (SMS if a mobile exists, else email). One message per member.
+Run ONCE per election, at the eligibility cutoff. Produces:
+  1. Firestore code documents (hashed) per member, scoped to their chapter's
+     poll_id (--write; --dry-run skips Firestore).
+  2. <out>/distribution_manifest.csv — one row per member, best single
+     channel (EMAIL FIRST per the adopted cost model; SMS only if no email;
+     "postcard" rows have no destination and go to the mailing-house list).
+  3. <out>/contact_index_private.csv — SENSITIVE contact -> member map that
+     powers the enumeration-safe /resend. Never publish.
 
-Design decisions (from the "simplest at scale" discussion):
-  - Dedup on MEMBER ID, not contact. Two members sharing an email each get
-    their own distinct code, so a shared inbox just holds two codes and each
-    person votes once.
-  - One code per member. Codes are single-use; the ballot enforces that.
-  - Best single channel per member => one message each (no 2-3x cost).
-  - We store ALL of a member's on-record contacts in a private lookup table
-    (member_contacts) so the enumeration-safe /resend can reach every channel
-    a member has WITHOUT us proactively sending to all of them.
-  - Only the SHA-256 hash of each code is stored server-side. The plaintext
-    lives only in the distribution manifest, which goes to the send platform
-    and (ideally) a neutral committee, not the app.
+Eligibility (Const. Art. V: paid up at time of election):
+    is_primary AND membership_status = 'Member in Good Standing'
+Dedup is on the primary ActionKit ID; contacts are aggregated across the
+member's whole dedup group, so any on-record email/phone can receive a
+resend, but each member gets exactly ONE code.
 
-This is a sketch to run in your environment; wire the BigQuery query to your
-actual clean_member_table schema.
+Chapter -> poll mapping comes from the poll configs (Firestore config__polls,
+falling back to the CHAPTERS seed): a poll matches roll rows whose chapter
+equals its `roll_chapter` field (defaulting to its display `name`). Roll
+chapters with no matching poll are counted and skipped.
+
+Usage:
+    python3 tools/generate_codes.py --demo             # offline shape demo
+    python3 tools/generate_codes.py --dry-run          # BigQuery, files only
+    python3 tools/generate_codes.py --write            # + Firestore code docs
+        [--project proj-tmc-mem-dsa] [--fs-project dsa-org-tools]
+        [--poll debs_endorsement__nyc ...] [--limit N] [--out-dir codes_out]
+
+PII: row-level member data only ever touches the output CSVs on local disk —
+this tool prints aggregate counts alone.
 """
 
+import argparse
 import csv
 import hashlib
-import secrets
 import os
+import secrets
+import sys
 
-# from google.cloud import bigquery, firestore   # enable in your environment
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 CODE_BYTES = 12  # secrets.token_urlsafe(12) -> ~16 chars, URL-safe
 BASE_URL = os.environ.get("VOTE_BASE_URL", "https://vote.dsausa.org")
+
+# Arrays come back TO_JSON_STRING-encoded so the bq CLI's CSV output stays
+# one column per field; chapters are inlined as escaped string literals.
+ROLL_QUERY = """
+WITH eligible AS (
+  SELECT actionkit_id, dedup_group_id
+  FROM `{roll}.ak_primary_id`
+  WHERE is_primary AND membership_status = 'Member in Good Standing'
+),
+contacts AS (
+  SELECT dedup_group_id,
+         ARRAY_AGG(DISTINCT NULLIF(email_norm, '') IGNORE NULLS) AS all_emails,
+         ARRAY_AGG(DISTINCT NULLIF(phone_norm, '') IGNORE NULLS) AS all_phones
+  FROM `{roll}.ak_primary_id`
+  GROUP BY 1
+)
+SELECT
+  e.actionkit_id           AS member_akid,
+  f.chapter                AS roll_chapter,
+  TO_JSON_STRING(c.all_emails) AS emails_json,
+  TO_JSON_STRING(c.all_phones) AS phones_json
+FROM eligible e
+JOIN `{roll}.ak_user_fields_pivoted` f ON f.user_id = e.actionkit_id
+JOIN contacts c ON c.dedup_group_id = e.dedup_group_id
+WHERE f.chapter IN ({chapters})
+"""
 
 
 def new_code() -> str:
@@ -43,129 +82,217 @@ def code_hash(code_plaintext: str) -> str:
     return hashlib.sha256(code_plaintext.encode()).hexdigest()
 
 
-def poll_id_for_chapter(chapter_slug: str) -> str:
-    # one poll instance per chapter; questions are shared, timing/roll are not
-    return f"debs_endorsement__{chapter_slug}"
+def load_poll_mapping(polls: dict, only: list) -> dict:
+    """roll chapter value -> poll_id, from poll configs."""
+    mapping = {}
+    for pid, cfg in polls.items():
+        if only and pid not in only:
+            continue
+        mapping[cfg.get("roll_chapter") or cfg["name"]] = pid
+    return mapping
 
 
-# ---- 1. pull the frozen, deduped roll -----------------------------------
-# Dedup on member_id. Pick best channel: mobile if present, else email.
-# Collect ALL contacts for the private resend lookup.
-ROLL_QUERY = """
-WITH deduped AS (
-  SELECT
-    member_id,
-    ANY_VALUE(chapter_slug)              AS chapter_slug,
-    ANY_VALUE(mobile_e164)               AS mobile,       -- normalized +1..., or NULL
-    ANY_VALUE(primary_email)             AS email,
-    ARRAY_AGG(DISTINCT all_email IGNORE NULLS) AS all_emails,
-    ANY_VALUE(mobile_e164)               AS all_mobile
-  FROM `proj-tmc-mem-dsa.main.clean_member_table`
-  WHERE memb_status IN ('M')            -- members in good standing as of cutoff
-  GROUP BY member_id
-)
-SELECT member_id, chapter_slug, mobile, email, all_emails
-FROM deduped
-"""
-
-
-def generate(rows, db=None):
-    """
-    rows: iterable of dicts with keys member_id, chapter_slug, mobile, email,
-          all_emails (list). In production these come from the ROLL_QUERY.
-    db:   firestore.Client() (None => dry run, manifest only)
-    Returns the distribution manifest rows.
-    """
-    manifest = []          # goes to the SMS/email platform
-    contact_index = []     # private: contact -> member_id, for resend lookup
-    seen_members = set()
-
+def generate(rows, mapping, db=None):
+    """rows: iterables/dicts with member_akid, roll_chapter, all_emails,
+    all_phones. Returns (manifest, contact_index, skipped_chapter_counts)."""
+    manifest, contact_index = [], []
+    skipped = {}
+    seen = set()
     for r in rows:
-        mid = r["member_id"]
-        if mid in seen_members:
-            continue            # dedup safety net
-        seen_members.add(mid)
-
-        chapter = r["chapter_slug"]
-        pid = poll_id_for_chapter(chapter)
+        akid = r["member_akid"]
+        if akid in seen:
+            continue                      # dedup safety net
+        seen.add(akid)
+        pid = mapping.get(r["roll_chapter"])
+        if pid is None:
+            skipped[r["roll_chapter"]] = skipped.get(r["roll_chapter"], 0) + 1
+            continue
+        member_id = f"AK{akid}"
         code = new_code()
         ch = code_hash(code)
-
-        # store ONLY the hash server-side, scoped to the member's chapter poll
         if db is not None:
             db.collection(f"{pid}__codes").document(ch).set({
-                "used": False,
-                "member_id": mid,          # for turnout accounting / resend only
-                "chapter": chapter,
+                "used": False, "member_id": member_id, "chapter": r["roll_chapter"],
             })
 
-        # best single channel: SMS if mobile present, else email
-        if r.get("mobile"):
-            channel, dest = "sms", r["mobile"]
+        emails = [e for e in (r.get("all_emails") or []) if e]
+        phones = [p for p in (r.get("all_phones") or []) if p]
+        # EMAIL FIRST (near-free); SMS only when no email; postcard tier last
+        if emails:
+            channel, dest = "email", sorted(emails)[0]
+        elif phones:
+            channel, dest = "sms", sorted(phones)[0]
         else:
-            channel, dest = "email", r.get("email")
-
-        link = f"{BASE_URL}/p/{pid}/v/{code}"
+            channel, dest = "postcard", ""
         manifest.append({
-            "member_id": mid,
-            "chapter": chapter,
-            "channel": channel,
-            "destination": dest,
-            "vote_link": link,
+            "member_id": member_id, "poll_id": pid, "chapter": r["roll_chapter"],
+            "channel": channel, "destination": dest,
+            "vote_link": f"{BASE_URL}/p/{pid}/v/{code}",
         })
-
-        # private contact index for enumeration-safe resend: map every
-        # on-record contact to this member (so resend can reach all channels
-        # WITHOUT us proactively blasting all of them)
-        contacts = set(r.get("all_emails") or [])
-        if r.get("email"):
-            contacts.add(r["email"])
-        if r.get("mobile"):
-            contacts.add(r["mobile"])
-        for c in contacts:
-            contact_index.append({"contact": c.strip().lower(), "member_id": mid,
-                                   "chapter": chapter, "code_hash": ch})
-
-    return manifest, contact_index
+        for contact in set(e.lower() for e in emails) | set(phones):
+            contact_index.append({"contact": contact.strip(), "member_id": member_id,
+                                  "poll_id": pid, "code_hash": ch})
+    return manifest, contact_index, skipped
 
 
-def write_outputs(manifest, contact_index):
-    with open("distribution_manifest.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["member_id", "chapter", "channel",
-                                          "destination", "vote_link"])
+def fetch_rows(project, roll_dataset, chapters, limit, out_dir):
+    """Pull the roll via the bq CLI (same auth as `bq query` in a shell — no
+    ADC needed). Raw rows land in a temp CSV under out_dir, are parsed, and
+    the temp file is removed by the caller's cleanup."""
+    import json
+    import subprocess
+    lits = ", ".join("'" + c.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                     for c in chapters)
+    q = ROLL_QUERY.format(roll=f"{project}.{roll_dataset}", chapters=lits)
+    if limit:
+        q += f"\nLIMIT {int(limit)}"
+    os.makedirs(out_dir, exist_ok=True)
+    raw = os.path.join(out_dir, "_roll_raw.csv")
+    with open(raw, "w") as f:
+        subprocess.run(
+            ["bq", "query", "--nouse_legacy_sql", "--format=csv",
+             "--max_rows=1000000", "--project_id", project, q],
+            stdout=f, stderr=subprocess.DEVNULL, check=True)
+    with open(raw, newline="") as f:
+        for row in csv.DictReader(f):
+            yield {"member_akid": int(row["member_akid"]),
+                   "roll_chapter": row["roll_chapter"],
+                   "all_emails": json.loads(row["emails_json"] or "[]"),
+                   "all_phones": json.loads(row["phones_json"] or "[]")}
+    os.remove(raw)
+
+
+def write_outputs(manifest, contact_index, skipped, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    mpath = os.path.join(out_dir, "distribution_manifest.csv")
+    with open(mpath, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["member_id", "poll_id", "chapter",
+                                          "channel", "destination", "vote_link"])
         w.writeheader()
         w.writerows(manifest)
-
-    # This file is SENSITIVE (maps contacts to codes). Keep it access-controlled;
-    # it powers /resend. Do NOT publish it.
-    with open("contact_index_private.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["contact", "member_id", "chapter",
-                                          "code_hash"])
+    cpath = os.path.join(out_dir, "contact_index_private.csv")
+    with open(cpath, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["contact", "member_id", "poll_id", "code_hash"])
         w.writeheader()
         w.writerows(contact_index)
 
-    # channel split for cost estimation
-    sms = sum(1 for m in manifest if m["channel"] == "sms")
-    email = sum(1 for m in manifest if m["channel"] == "email")
-    print(f"members: {len(manifest)}")
-    print(f"  SMS sends:   {sms}")
-    print(f"  email sends: {email}")
-    print("wrote distribution_manifest.csv (for send platform)")
-    print("wrote contact_index_private.csv (SENSITIVE - for /resend only)")
+    by_channel = {}
+    by_poll = {}
+    for m in manifest:
+        by_channel[m["channel"]] = by_channel.get(m["channel"], 0) + 1
+        by_poll[m["poll_id"]] = by_poll.get(m["poll_id"], 0) + 1
+    print(f"members coded: {len(manifest)}")
+    for pid in sorted(by_poll):
+        print(f"    {pid}: {by_poll[pid]}")
+    for chnl in ("email", "sms", "postcard"):
+        print(f"  {chnl} sends: {by_channel.get(chnl, 0)}")
+    if skipped:
+        print(f"  skipped (no poll for roll chapter): {sum(skipped.values())} "
+              f"members across {len(skipped)} chapters")
+    print(f"wrote {mpath} (for the send platform)")
+    print(f"wrote {cpath} (SENSITIVE — powers /resend; never publish)")
+
+
+def firestore_bulk_client(fs_project):
+    from google.cloud import firestore
+    db = firestore.Client(project=fs_project)
+
+    class Bulk:
+        """Same .collection().document().set() shape, but batched."""
+        def __init__(self):
+            self.writer = db.bulk_writer()
+            self.n = 0
+        def collection(self, name):
+            outer = self
+            class C:
+                def document(self, key):
+                    ref = db.collection(name).document(key)
+                    class D:
+                        def set(self, doc):
+                            outer.writer.set(ref, doc)
+                            outer.n += 1
+                            if outer.n % 10000 == 0:
+                                print(f"    ...{outer.n} code docs queued")
+                    return D()
+            return C()
+        def flush(self):
+            self.writer.close()
+            print(f"    {self.n} code docs written")
+    return Bulk()
+
+
+def demo():
+    mapping = {"New York City": "debs_endorsement__nyc", "Chicago": "debs_endorsement__chi"}
+    rows = [
+        {"member_akid": 1, "roll_chapter": "New York City",
+         "all_emails": ["a@example.com", "a.old@example.com"], "all_phones": ["+12125550111"]},
+        {"member_akid": 2, "roll_chapter": "New York City", "all_emails": [],
+         "all_phones": ["+12125550122"]},
+        {"member_akid": 3, "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
+         "all_phones": []},
+        {"member_akid": 4, "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
+         "all_phones": []},
+        {"member_akid": 5, "roll_chapter": "Boise", "all_emails": ["c@example.com"],
+         "all_phones": []},
+    ]
+    manifest, idx, skipped = generate(rows, mapping, db=None)
+    write_outputs(manifest, idx, skipped, "codes_out_demo")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--demo", action="store_true", help="offline demo rows")
+    mode.add_argument("--dry-run", action="store_true", help="BigQuery, files only")
+    mode.add_argument("--write", action="store_true", help="BigQuery + Firestore codes")
+    ap.add_argument("--project", default="proj-tmc-mem-dsa", help="BigQuery project")
+    ap.add_argument("--roll-dataset", default="main")
+    ap.add_argument("--fs-project", default="dsa-org-tools", help="Firestore project")
+    ap.add_argument("--poll", action="append", default=[],
+                    help="restrict to these poll_ids (repeatable)")
+    ap.add_argument("--limit", type=int, default=0, help="row cap for test runs")
+    ap.add_argument("--out-dir", default="codes_out")
+    args = ap.parse_args()
+
+    if args.demo:
+        demo()
+        return
+
+    # poll configs: Firestore config__polls when seeded, else the CHAPTERS seed
+    import vote_service
+    try:
+        from google.cloud import firestore
+        client = firestore.Client(project=args.fs_project)
+        polls = {s.id: (s.to_dict() or {}) for s in client.collection("config__polls").stream()}
+        polls = {pid: d for pid, d in polls.items() if not d.get("archived")}
+    except Exception:
+        polls = {}
+    if not polls:
+        polls = vote_service.CHAPTERS
+    mapping = load_poll_mapping(polls, args.poll)
+    print(f"polls: {len(mapping)} chapter mapping(s): "
+          + ", ".join(f"{c!r}->{p}" for c, p in sorted(mapping.items())))
+
+    # PII guard: on any failure, keep the traceback (which may quote row
+    # values) out of the terminal — full details go to a local log instead.
+    try:
+        rows = fetch_rows(args.project, args.roll_dataset, list(mapping),
+                          args.limit, args.out_dir)
+        db = firestore_bulk_client(args.fs_project) if args.write else None
+        manifest, idx, skipped = generate(rows, mapping, db=db)
+        if db is not None:
+            db.flush()
+        write_outputs(manifest, idx, skipped, args.out_dir)
+    except Exception as e:
+        import traceback
+        os.makedirs(args.out_dir, exist_ok=True)
+        log = os.path.join(args.out_dir, "generate_codes_error.log")
+        with open(log, "w") as f:
+            traceback.print_exc(file=f)
+        print(f"ERROR: {type(e).__name__} — full traceback in {log} "
+              "(may contain row data; review locally, don't paste)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    # DRY-RUN demo with fake rows so you can see the output shape
-    demo = [
-        {"member_id": "M001", "chapter_slug": "nyc", "mobile": "+12125550111",
-         "email": "a@example.com", "all_emails": ["a@example.com", "a.old@example.com"]},
-        {"member_id": "M002", "chapter_slug": "nyc", "mobile": None,
-         "email": "b@example.com", "all_emails": ["b@example.com"]},
-        # two members sharing an email -> each still gets a distinct code
-        {"member_id": "M003", "chapter_slug": "chi", "mobile": "+13125550199",
-         "email": "family@example.com", "all_emails": ["family@example.com"]},
-        {"member_id": "M004", "chapter_slug": "chi", "mobile": None,
-         "email": "family@example.com", "all_emails": ["family@example.com"]},
-    ]
-    manifest, idx = generate(demo, db=None)
-    write_outputs(manifest, idx)
+    main()

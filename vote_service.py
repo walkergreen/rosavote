@@ -32,7 +32,21 @@ from google.cloud import firestore
 from google.api_core import exceptions as gcloud_exc
 
 app = Flask(__name__)
-db = firestore.Client()
+
+
+class _LazyDB:
+    """Defers firestore.Client() to first use so the module imports (and
+    /healthz serves) without credentials — tools that only need the CHAPTERS
+    seed, and local shells without ADC, can import vote_service freely."""
+    _client = None
+
+    def __getattr__(self, name):
+        if _LazyDB._client is None:
+            _LazyDB._client = firestore.Client()
+        return getattr(_LazyDB._client, name)
+
+
+db = _LazyDB()
 
 # ---- shared ballot definition (identical across all chapters) -------------
 # Five questions. Ranked questions (q2, q3) are Scottish STV; an ["ABSTAIN"]

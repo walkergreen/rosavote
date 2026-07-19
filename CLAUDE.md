@@ -49,8 +49,13 @@ gunicorn. Firestore Native mode already exists in `dsa-org-tools`.
   Server injects: `__POLL_ID__ __CHAPTER_NAME__ __CODE__ __Q6_QUESTION__
   __Q8_QUESTION__ __Q7_OPTIONS__ __Q7_NOTE__ __Q7_SEATS__ __Q7_ALTS__
   __Q7_NAMES__ __HELP_SUBJECT__`.
-- `tools/` — `generate_codes.py` (roll → hashed codes + delivery manifest; the
-  BigQuery query still needs wiring to the real primary-AKID schema),
+- `tools/` — `generate_codes.py` (roll → hashed codes + delivery manifest,
+  wired to `proj-tmc-mem-dsa.main.ak_primary_id` joined to
+  `ak_user_fields_pivoted` for chapter; eligibility = is_primary + "Member in
+  Good Standing"; fetches via the `bq` CLI so plain gcloud auth works —
+  `--write` (Firestore code docs) still needs ADC; email-first channel
+  ladder; PII only ever goes to output files, stdout is aggregate counts,
+  tracebacks are diverted to a local log),
   `build_chain.py` (post-close tamper-evidence chain; includes voided ballots
   flagged), `make_blt.py` (BLT export; excludes voided; delegate rankings come
   from the separate secret collection), `verify.py`, `resend.py`,
@@ -124,6 +129,9 @@ Do not "fix" this by renaming keys — Firestore data and tools reference them.
 - Template is one file with inline JS; always node --check after edits.
 - Splash HTML lives inside vote_service.py (SPLASH string).
 - Test codes must match CODE_RE (`[A-Za-z0-9_-]{12,64}`).
+- Local venv runs Python 3.14: needs google-cloud-firestore ≥2.28 /
+  protobuf ≥6 (older protobuf crashes on import). The Firestore client in
+  vote_service is lazy (`_LazyDB`) so imports work without GCP creds.
 - A parallel Claude session has edited these files before — check `git status`
   /timestamps before large refactors.
 
@@ -143,7 +151,11 @@ deletion).
    `/admin/` (builder + Art. V validation, adjudication queue, void UI,
    close-out), scoped chapter-admin tokens. Still open from this item:
    roll picker + code gen in the console (blocked on roadmap #2).
-2. Wire generate_codes.py to the real primary-AKID roll schema.
+2. ~~Wire generate_codes.py to the real roll~~ DONE (2026-07-19):
+   `ak_primary_id` (124,596 eligible primaries at wiring time; ~100% email
+   coverage) + `ak_user_fields_pivoted.chapter` (241 chapters; matched to
+   polls by `roll_chapter`/`name`). Open: a real `--write` run needs ADC
+   (`gcloud auth application-default login`, or run from a service account).
 3. Cloud Scheduler close-out automation; Cloud Armor; min/max instances;
    Secret Manager; billing alerts.
 4. Human screen-reader pass (VoiceOver/TalkBack/NVDA) before any public WCAG

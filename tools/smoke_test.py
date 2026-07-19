@@ -237,6 +237,25 @@ ok(c.post(f"/admin/api/polls/debs_endorsement__nyc/provisionals/{p2}", headers=h
           json={"action": "reject", "note": "duplicate of coded vote"}).status_code == 200,
    "reject records the decision")
 
+# code generation (pure logic — the BigQuery path needs real creds)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+import generate_codes  # noqa: E402
+
+gm, gci, gsk = generate_codes.generate(
+    [{"member_akid": 1, "roll_chapter": "New York City",
+      "all_emails": ["x@example.org"], "all_phones": ["+12125550100"]},
+     {"member_akid": 1, "roll_chapter": "New York City",
+      "all_emails": ["x@example.org"], "all_phones": []},
+     {"member_akid": 2, "roll_chapter": "Nowhere",
+      "all_emails": ["y@example.org"], "all_phones": []},
+     {"member_akid": 3, "roll_chapter": "New York City",
+      "all_emails": [], "all_phones": ["+12125550101"]}],
+    {"New York City": "p1"})
+ok(len(gm) == 2 and gm[0]["channel"] == "email" and gm[1]["channel"] == "sms",
+   "codegen: dedup + email-first channel ladder")
+ok(gsk == {"Nowhere": 1} and all(r["member_id"].startswith("AK") for r in gm),
+   "codegen: unmapped chapters skipped, AK member ids")
+
 # close-out button: chapter admin closes own poll; votes bounce immediately
 ok(c.post("/admin/api/polls/debs_endorsement__chi/close", headers=chi_hdr, json={}).status_code == 200,
    "chapter closes own poll")
