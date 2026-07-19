@@ -59,14 +59,20 @@
   .provrow .fields{margin:6px 0;line-height:1.5}
   .newcode{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:1.1rem;letter-spacing:.06em;background:var(--cream);border:1px dashed var(--ink);padding:6px 12px;display:inline-block;margin-top:8px}
   /* ---- results charts (palette CVD-validated: #dd1111 / #2a78d6 / #767676) ---- */
-  .rb-row{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:.82rem}
-  .rb-name{flex:0 0 150px;text-align:right;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .rb-track{flex:1;position:relative;height:18px;background:var(--cream);border:1px solid rgba(0,0,0,.2)}
-  .rb-fill{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0;min-width:0}
-  .f-elected{background:#dd1111}.f-cont{background:#2a78d6}.f-muted{background:#767676}
-  .rb-val{flex:0 0 110px;font-variant-numeric:tabular-nums;font-size:.78rem}
+  /* OpaVote-style: full-width track, candidate name overlaid on the bar */
+  .rb-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.82rem}
+  .rb-track{flex:1;position:relative;height:30px;background:var(--cream);border:1px solid rgba(0,0,0,.25);
+    overflow:hidden;transition:box-shadow .12s,border-color .12s;cursor:default}
+  .rb-track:hover{box-shadow:3px 3px 0 0 var(--ink);border-color:var(--ink)}
+  .rb-track.hl{border-color:var(--dsa);box-shadow:3px 3px 0 0 var(--dsa)}
+  .rb-fill{position:absolute;left:0;top:0;bottom:0;min-width:2px;transition:width .35s ease}
+  .rb-lbl{position:absolute;left:9px;top:0;bottom:0;display:flex;align-items:center;
+    font-weight:700;white-space:nowrap;z-index:1;text-shadow:0 0 2px var(--cream),0 0 2px var(--cream)}
+  .f-elected{background:#f0a800}.f-cont{background:#8fb8ea}.f-muted{background:#c7c7c7}
+  .rb-track.win .rb-fill{background:#dd1111}.rb-track.win .rb-lbl{color:#fff5e5;text-shadow:none}
+  .rb-val{flex:0 0 96px;font-variant-numeric:tabular-nums;font-size:.78rem}
   .rb-val b{font-size:.85rem}
-  .rb-quota{position:absolute;top:-3px;bottom:-3px;width:2px;background:#000}
+  .rb-quota{position:absolute;top:-2px;bottom:-2px;width:0;border-left:2px dashed #000;z-index:2}
   .stagecard{border:1px solid rgba(0,0,0,.25);padding:8px 10px;margin:8px 0;background:#fff}
   .stagehead{font-weight:700;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:var(--dsa)}
   .chart-legend{font-size:.72rem;margin:6px 0 2px;color:rgba(0,0,0,.7)}
@@ -1052,13 +1058,14 @@ window.toggleQuota = function(k){
   b.textContent = showU ? "Back to the official result (quotas applied)" : "Compare: without quota requirements";
 };
 function barChart(rows){
-  // horizontal bars, direct value labels, tooltips on hover
+  // full-width bars with the label overlaid; rows = [name, value, fillClass, win?]
   var max = Math.max(1, Math.max.apply(null, rows.map(function(r){ return r[1]; })));
   return rows.map(function(r){
     var pct = Math.round(r[1]/max*1000)/10;
-    return "<div class='rb-row' title='"+esc(r[0])+": "+r[1]+"'>"+
-      "<span class='rb-name'>"+esc(r[0])+"</span>"+
-      "<span class='rb-track'><span class='rb-fill "+r[2]+"' style='width:"+pct+"%'></span></span>"+
+    return "<div class='rb-row'>"+
+      "<span class='rb-track"+(r[3]?" win":"")+"' title='"+esc(r[0])+": "+r[1]+"'>"+
+        "<span class='rb-fill "+r[2]+"' style='width:"+pct+"%'></span>"+
+        "<span class='rb-lbl'>"+esc(r[0])+"</span></span>"+
       "<span class='rb-val'><b>"+r[1]+"</b></span></div>";
   }).join("");
 }
@@ -1084,6 +1091,7 @@ function stvChart(q){
       (newly.length ? " <b>"+esc(newly.join(", "))+" reached the quota of "+q.quota+" and "+(newly.length===1?"is":"are")+" elected.</b>" : "")+
       (prev && st.nontransferable>prev.nontransferable ? " <small>"+(Math.round((st.nontransferable-prev.nontransferable)*100)/100)+" votes became non-transferable.</small>" : "")+
       "</p>";
+    var qpct = Math.round(q.quota/scaleMax*1000)/10;
     order.forEach(function(cand){
       var v = st.totals[cand];
       var status = st.status[cand];
@@ -1092,22 +1100,24 @@ function stvChart(q){
       var pct = Math.round(val/scaleMax*1000)/10;
       var cls = status==="elected" ? "f-elected" : status==="excluded"||out ? "f-muted" : "f-cont";
       var mark = status==="elected" ? " ✓" : (status==="excluded"||out) ? " ✗" : "";
+      var win = status==="elected";
       var delta = "";
       if(prev && !out && prev.totals[cand] != null){
         var dv = Math.round((v - prev.totals[cand])*100)/100;
         if(dv) delta = " <span class='rb-delta'>("+(dv>0?"+":"")+dv+")</span>";
       }
-      html += "<div class='rb-row' title='"+esc(cand)+": "+(out?"excluded":val)+"'>"+
-        "<span class='rb-name'>"+esc(cand)+mark+"</span>"+
-        "<span class='rb-track'>"+
+      html += "<div class='rb-row'>"+
+        "<span class='rb-track"+(win?" win":"")+"' title='"+esc(cand)+": "+(out?"excluded":val)+"'>"+
           (out?"":"<span class='rb-fill "+cls+"' style='width:"+pct+"%'></span>")+
-          "<span class='rb-quota' style='left:"+Math.round(q.quota/scaleMax*1000)/10+"%'></span>"+
+          "<span class='rb-quota' style='left:"+qpct+"%'></span>"+
+          "<span class='rb-lbl'>"+esc(cand)+mark+"</span>"+
         "</span><span class='rb-val'>"+(out?"<small>out</small>":"<b>"+(Math.round(v*100)/100)+"</b>"+delta)+"</span></div>";
     });
-    if(st.nontransferable) html += "<div class='rb-row' title='non-transferable: "+st.nontransferable+"'>"+
-      "<span class='rb-name'><small>non-transferable</small></span>"+
-      "<span class='rb-track'><span class='rb-fill f-muted' style='width:"+
-      (Math.round(st.nontransferable/scaleMax*1000)/10)+"%'></span></span>"+
+    if(st.nontransferable) html += "<div class='rb-row'>"+
+      "<span class='rb-track' title='non-transferable: "+st.nontransferable+"'>"+
+        "<span class='rb-fill f-muted' style='width:"+
+        (Math.round(st.nontransferable/scaleMax*1000)/10)+"%'></span>"+
+        "<span class='rb-lbl'><small>non-transferable</small></span></span>"+
       "<span class='rb-val'><small>"+(Math.round(st.nontransferable*100)/100)+"</small></span></div>";
     html += "</div>";
   });
