@@ -806,4 +806,10 @@ ok(c.post("/admin/api/polls/rf_test", headers=chi_hdr,
           json={"name": "x", "questions": RF_Q}).status_code == 403,
    "chapter token forbidden from the election builder (the {error:forbidden} case)")
 
+# ---- API docs page ----
+api_html = c.get("/api").data.decode()
+ok(c.get("/api").status_code == 200 and "API Reference" in api_html
+   and "/admin/api/polls" in api_html and "{title}" not in api_html,
+   "API reference page renders")
+
 print(f"SMOKE TEST: all {passed} checks passed")

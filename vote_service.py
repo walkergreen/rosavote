@@ -1067,6 +1067,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
+      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a>.</p>
       <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
       <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
       no credentials needed.</p>
@@ -3175,6 +3176,99 @@ LOGO_SVG = """<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
 def logo():
     return Response(LOGO_SVG, mimetype="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+API_GROUPS = [
+    ("Public — voter", [
+        ("GET", "/p/&lt;poll&gt;/", "None", "The branded ballot page for a poll."),
+        ("GET", "/p/&lt;poll&gt;/v/&lt;code&gt;", "None", "Ballot page with a one-tap voting code embedded."),
+        ("GET", "/p/&lt;poll&gt;/voted?code=…", "None", "Has this code already voted? → {voted: bool}. Malformed/unknown codes are rejected before any DB read."),
+        ("POST", "/p/&lt;poll&gt;/vote", "Voting code (in body)", "Cast a ballot: {code, answers:{questionKey:value}}. One code = one vote, enforced atomically. → {status:'recorded', receipt}."),
+        ("POST", "/p/&lt;poll&gt;/provisional", "None", "Cast a sealed provisional ballot with identifying info for later adjudication."),
+        ("GET", "/p/&lt;poll&gt;/verify?receipt=…", "None", "Confirm a ballot was stored → {found, status}. No identity, no answers — safe to share."),
+        ("GET", "/p/&lt;poll&gt;/results", "None", "Public results page (only after finalize + publish). Aggregate only; served from a frozen cache."),
+    ]),
+    ("Admin — auth", [
+        ("GET", "/admin/api/whoami", "X-Admin-Token", "Resolve the caller's identity → {name, role, polls}."),
+        ("POST", "/admin/api/admins", "National", "Mint a scoped admin token (plaintext returned once). Body: {name, role, polls, token?}."),
+    ]),
+    ("Admin — elections", [
+        ("GET", "/admin/api/polls", "Any admin", "List polls visible to this token (chapter tokens see only their own)."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;", "National", "Create or update a poll config (the whole ballot schema). unfinalize:true to reopen a certified poll (audited)."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/open", "Poll admin", "Open voting now (with or without a schedule)."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/close", "Poll admin", "Close voting now."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/publish", "Poll admin", "Publish/unpublish the public results page (finalized polls). Body: {publish:bool}."),
+        ("POST", "/admin/api/cron/closeout", "National", "Finalize every poll past its window. Called by Cloud Scheduler every 15 min; idempotent."),
+    ]),
+    ("Admin — results &amp; tabulation", [
+        ("GET", "/admin/api/polls/&lt;poll&gt;/results", "Poll admin", "Full tallies (finalized, or national + ?live=1, audited). ?fresh=1 recomputes past the cache."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/recount_preview", "Poll admin", "Preview a ranked contest under another method. Body: {question, method: plurality|approval|borda|irv|meek}."),
+        ("GET", "/admin/api/polls/&lt;poll&gt;/blt/&lt;qkey&gt;", "Poll admin", "Download a contest as a standard .blt. ?recount=1 alternates; ?withdraw=IDS dropout recount."),
+        ("GET", "/admin/api/polls/&lt;poll&gt;/export.zip", "Poll admin", "Results package: .txt/.csv/.json reports, printable .html, every .blt, ballots.csv, verify readme. ?anonymize=1."),
+        ("POST", "/admin/api/count_blt", "Any admin", "Run Scottish/Meek STV on a posted .blt (with optional constraints). Touches no stored data."),
+    ]),
+    ("Admin — voters", [
+        ("GET", "/admin/api/polls/&lt;poll&gt;/voters", "Poll admin", "Per-voter turnout + received-verification + integrity counter. Never how anyone voted. ?member_id=… to search."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/voters/import", "National", "Import a roll (JSON members[]). Mints hashed codes, returns the plaintext manifest once."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/voters/import_gcs", "National", "Import a roll CSV from gs://bucket/file.csv (header member_id; optional chapter, weight)."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/voters/import_bigquery", "National", "Import eligible members by roll chapter straight from the warehouse."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/voters/weight", "National", "Set a voter's ballot weight (1–1000). Resolved at tally time."),
+    ]),
+    ("Admin — adjudication &amp; remedy", [
+        ("GET", "/admin/api/polls/&lt;poll&gt;/provisionals", "Poll admin", "Pending provisionals — identity fields only; answers stay sealed."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/provisionals/&lt;receipt&gt;", "Poll admin", "Adjudicate: {action:'verify', member_id} promotes + burns codes; {action:'reject', note}."),
+        ("GET", "/admin/api/polls/&lt;poll&gt;/lookup?member_id|receipt=…", "National", "Troubleshooting: identity-linked answers; secret questions show recorded-or-not, never content. Audited."),
+        ("POST", "/p/&lt;poll&gt;/admin/void", "Poll admin", "Void a cast ballot (flag, never delete) and reissue a fresh code. Open-window only, audited."),
+    ]),
+]
+
+
+def _api_docs_html():
+    rows = ""
+    for group, eps in API_GROUPS:
+        rows += f'<h2>{group}</h2><table>'
+        rows += '<tr><th>Method</th><th>Path</th><th>Auth</th><th>What it does</th></tr>'
+        for m, path, auth, desc in eps:
+            mc = {"GET": "#2a78d6", "POST": "#dd1111"}.get(m, "#767676")
+            rows += (f'<tr><td><b style="color:{mc}">{m}</b></td>'
+                     f'<td><code>{path}</code></td><td>{auth}</td><td>{desc}</td></tr>')
+        rows += "</table>"
+    body = f"""
+<h2>Overview</h2>
+<p>RosaVote is API-first: the admin console is a thin client over these
+endpoints, so anything it does can be scripted. Base URL is this deployment's
+origin. All responses are JSON unless noted (ballot/console pages return HTML;
+BLT and ZIP exports return files).</p>
+<h2>Authentication</h2>
+<p>Admin endpoints take an <b>admin token</b> in the <code>X-Admin-Token</code>
+header. Tokens are stored only as SHA-256 hashes. <b>National</b> tokens can do
+everything; <b>chapter</b> tokens are scoped to their own polls and cannot
+build elections, import rolls, set weights, or run lookups. Voter endpoints
+take a one-time <b>voting code</b> in the request body, never a header. Every
+administrative action is written to an append-only audit log under the token's
+name.</p>
+<h2>Conventions</h2>
+<p><code>&lt;poll&gt;</code> is a poll id (<code>[a-z0-9_]{{3,64}}</code>).
+Errors are <code>{{error, message}}</code> with a 4xx/5xx status. Rate note:
+the service scales on Cloud Run behind an instance cap — floods become
+slowness, not failures, and never affect an in-progress vote.</p>
+{rows}
+<h2>Example</h2>
+<pre>curl -s -H "X-Admin-Token: $TOKEN" \\
+  https://&lt;origin&gt;/admin/api/polls/my_poll/results?live=1</pre>
+"""
+    return _LEGAL_SHELL.replace(
+        "<style>", "<style>table{{border-collapse:collapse;width:100%;margin:6px 0 20px;"
+        "font-size:.86rem;font-family:system-ui,sans-serif}}"
+        "th,td{{border:1px solid rgba(0,0,0,.2);padding:6px 8px;text-align:left;vertical-align:top}}"
+        "th{{background:#ffe1b2;font-family:'Arial Narrow',sans-serif;text-transform:uppercase;font-size:.72rem}}"
+        "td code{{font-size:.82rem;word-break:break-all}}pre{{background:#fff5e5;border:1px solid #000;"
+        "padding:10px;overflow-x:auto;font-size:.82rem}}").format(title="API Reference", body=body)
+
+
+@app.get("/api")
+def api_docs():
+    return Response(_api_docs_html(), mimetype="text/html")
 
 
 @app.get("/terms")
