@@ -1592,8 +1592,8 @@ SPLASH = """<!doctype html><html lang="en"><head>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
       <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/methods" style="color:var(--dsa);font-weight:700">voting methods</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a> &middot; <a href="/vs-opavote" style="color:var(--dsa);font-weight:700">Why RosaVote</a>.</p>
       <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
-      <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
-      no credentials needed.</p>
+      <b>one-tap demo sign-in</b> that opens as <b>national root admin</b> on a synthetic-data
+      sandbox &mdash; the full admin experience, no credentials needed.</p>
       <details style="margin-top:12px">
         <summary>How to get access</summary>
         <div class="dbody">
@@ -1906,7 +1906,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>RosaVote</b> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; <a href="/about" style="color:inherit">About</a> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){
   var intro = document.getElementById("intro");
@@ -1937,6 +1937,38 @@ def index():
     html = (SPLASH.replace("__TEST_ROWS__", rows).replace("__CHAPTER_LINKS__", links)
             .replace("__SOURCE_URL__", SOURCE_URL))
     return Response(html, mimetype="text/html")
+
+
+# ---- marketing landing (/about) -----------------------------------------
+# The RosaVote pitch page (features, OpaVote comparison, cost calculator,
+# OpenSlides "different tools" section). Authored as a self-contained body in
+# marketing.html; wrapped in a full HTML document here so it serves standalone.
+_MARKETING_DOC = None
+
+
+def _marketing_doc() -> str:
+    global _MARKETING_DOC
+    if _MARKETING_DOC is None:
+        raw = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "marketing.html"), encoding="utf-8").read()
+        m = re.search(r"<title>(.*?)</title>", raw, re.S)
+        title = (m.group(1).strip() if m else "RosaVote")
+        body = raw.replace(m.group(0), "", 1) if m else raw
+        # The authored file links to the app by absolute run.app URL (needed for
+        # the off-site artifact copy); served from the app, make them same-origin
+        # so they follow whatever host/domain is in front.
+        body = body.replace("https://member-ballot-v3-62155002849.us-east1.run.app", "")
+        _MARKETING_DOC = (
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<meta name=\"color-scheme\" content=\"light dark\">"
+            f"<title>{title}</title></head><body>{body}</body></html>")
+    return _MARKETING_DOC
+
+
+@app.get("/about")
+def about_page():
+    return Response(_marketing_doc(), mimetype="text/html")
 
 
 # ---- admin auth: scoped tokens -------------------------------------------

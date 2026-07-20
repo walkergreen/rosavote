@@ -5,6 +5,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY vote_service.py .
 COPY ballot_template.html .
 COPY admin_console.html .
+COPY marketing.html .
 COPY stv_tabulate.py .
 COPY senders.py .
 COPY templates/ ./templates/

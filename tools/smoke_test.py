@@ -152,6 +152,16 @@ ok(b.index("How your votes are seen") < b.index("Question 1 of 8"), "disclosure 
 ok(all(x in b for x in ["Chapter Poll", "Convention Delegates", "Local Issues",
                         "expanded count", "Meyer London"]), "sections + slate")
 
+# marketing landing (/about): full HTML doc, key sections, same-origin links
+_ab = c.get("/about")
+ok(_ab.status_code == 200 and _ab.data[:15].lower().startswith(b"<!doctype html"),
+   "/about serves a full HTML document")
+_abt = _ab.data.decode()
+ok(all(x in _abt for x in ["RosaVote is the better default", "What would an election cost",
+                           "aren't rivals", 'id="rose"']), "/about has marketing sections")
+ok("member-ballot-v3-62155002849" not in _abt and 'href="/vs-opavote"' in _abt,
+   "/about uses same-origin links (run.app rewritten)")
+
 # vote: identity-linked main record, secret delegate record
 r = c.post("/p/debs_endorsement__nyc/vote", json={"code": "A" * 16, "answers": GOOD})
 ok(r.status_code == 200, "vote accepted")
