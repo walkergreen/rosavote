@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Replay a real election through the LIVE voting API — as if every ballot were
 cast from a separate remote device — then prove the stored result matches.

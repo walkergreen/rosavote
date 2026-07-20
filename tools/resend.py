@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Enumeration-safe, rate-limited code resend.
 
@@ -127,15 +129,46 @@ def resend():
 
 def _trigger_platform_resend(member_id, pid, on_record_contacts):
     """
-    Ask the send platform to re-deliver THIS member's existing ballot link to
-    THEIR on-record contacts. The platform holds the plaintext link (from the
-    distribution manifest); the app never needs it. We pass member_id, not a
-    destination the user supplied.
+    Re-deliver THIS member's existing ballot link to THEIR on-record contacts,
+    using the same channels as the mass send (tools/senders.py). The plaintext
+    link comes from the distribution manifest (member_id -> vote_link), read
+    from MANIFEST_PATH — the app never stores plaintext codes. We resend to the
+    member's OWN on-record contacts only, never a destination the caller typed,
+    so /resend can't be used to spray a link at an arbitrary address.
     """
-    # e.g. solidarity_tech.resend_by_member(member_id)   (SMS to on-record mobile)
-    #      ak.resend_by_member(member_id)                 (email to on-record emails)
-    print(f"[resend] member={member_id} poll={pid} "
-          f"channels={len(on_record_contacts)} on-record contacts")
+    import csv
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import senders
+
+    link = None
+    mpath = os.environ.get("MANIFEST_PATH", "")
+    if mpath and os.path.exists(mpath):
+        with open(mpath, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("member_id") == str(member_id):
+                    link = row.get("vote_link")
+                    break
+    if not link:
+        # manifest not mounted here — leave to the external send platform,
+        # keyed by member_id (which holds the plaintext link). Never log the link.
+        print(f"[resend] member={member_id} poll={pid} "
+              f"contacts={len(on_record_contacts)} (deferred to send platform)")
+        return
+
+    mail = senders.MailgunSender()
+    sms = senders.sms_sender()   # Twilio for one-off SMS if configured
+    delivered = 0
+    for contact in on_record_contacts:
+        if "@" in contact and mail.configured():
+            if mail.send_batch([{"email": contact, "link": link}]).ok:
+                delivered += 1
+        elif contact.replace("+", "").isdigit() and sms.configured():
+            if sms.send_one(contact, link).ok:
+                delivered += 1
+    # counts only — never the contact or the link
+    print(f"[resend] member={member_id} poll={pid} delivered={delivered}")
 
 
 # In vote_service.py:  app.add_url_rule("/resend", "resend", resend, methods=["POST"])

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Export five-question ballots to BLT files for external verification.
 
@@ -278,7 +280,7 @@ def _write(out_path, contest, lines):
 def export_from_questions(questions, poll_id, all_answers, secret_rows, out_prefix):
     """Schema-built ballots: derive every contest from the questions list.
     yesno -> Yes/No BLT; ranked -> STV BLT (+ alternates recount under the
-    two-count method when alternates>0); multi -> option counts to stdout;
+    expanded count when alternates>0); multi -> option counts to stdout;
     text -> skipped (identity-linked comments are never exported)."""
     for q in questions:
         key, typ = q["key"], q["type"]

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Code generation + distribution-manifest builder, wired to the real roll:
 `proj-tmc-mem-dsa.main.ak_primary_id` (deduplicated primary-AKID mapping)
@@ -92,12 +94,34 @@ def load_poll_mapping(polls: dict, only: list) -> dict:
     return mapping
 
 
-def generate(rows, mapping, db=None):
+def _norm_contact(c):
+    """Match vote_service._norm_contact so a submitted contact hashes to the
+    same key the resend index was provisioned under."""
+    c = (c or "").strip().lower()
+    if "@" in c:
+        return c
+    return "".join(ch for ch in c if ch.isdigit() or ch == "+")
+
+
+def _resend_hash(pid, contact):
+    import hashlib
+    return hashlib.sha256(f"{pid}|{_norm_contact(contact)}".encode()).hexdigest()
+
+
+def generate(rows, mapping, db=None, resend_index=False):
     """rows: iterables/dicts with member_akid, roll_chapter, all_emails,
-    all_phones. Returns (manifest, contact_index, skipped_chapter_counts)."""
+    all_phones. Returns (manifest, contact_index, skipped_chapter_counts).
+
+    resend_index: when True (and db given), also provision the OPT-IN
+    `{poll}__resend` collection that powers self-serve /resend — one doc per
+    on-record contact (keyed by a salted hash of the contact) holding the
+    member's ballot link + their on-record destinations. This intentionally
+    stores the link (= the code) in Firestore, so it's off by default; enable
+    it per election only where self-serve resend is wanted."""
     manifest, contact_index = [], []
     skipped = {}
     seen = set()
+    resend_docs = 0
     for r in rows:
         akid = r["member_akid"]
         if akid in seen:
@@ -110,6 +134,7 @@ def generate(rows, mapping, db=None):
         member_id = f"AK{akid}"
         code = new_code()
         ch = code_hash(code)
+        vote_link = f"{BASE_URL}/p/{pid}/v/{code}"
         if db is not None:
             db.collection(f"{pid}__codes").document(ch).set({
                 "used": False, "member_id": member_id, "chapter": r["roll_chapter"],
@@ -127,11 +152,19 @@ def generate(rows, mapping, db=None):
         manifest.append({
             "member_id": member_id, "poll_id": pid, "chapter": r["roll_chapter"],
             "channel": channel, "destination": dest,
-            "vote_link": f"{BASE_URL}/p/{pid}/v/{code}",
+            "vote_link": vote_link,
         })
         for contact in set(e.lower() for e in emails) | set(phones):
             contact_index.append({"contact": contact.strip(), "member_id": member_id,
                                   "poll_id": pid, "code_hash": ch})
+        if db is not None and resend_index and (emails or phones):
+            dests = sorted(set(e.lower().strip() for e in emails)) + sorted(set(phones))
+            for contact in dests:
+                db.collection(f"{pid}__resend").document(_resend_hash(pid, contact)).set(
+                    {"link": vote_link, "dests": dests})
+                resend_docs += 1
+    if resend_index:
+        print(f"resend index docs written: {resend_docs}")
     return manifest, contact_index, skipped
 
 
@@ -252,6 +285,10 @@ def main():
                     help="restrict to these poll_ids (repeatable)")
     ap.add_argument("--limit", type=int, default=0, help="row cap for test runs")
     ap.add_argument("--out-dir", default="codes_out")
+    ap.add_argument("--resend-index", action="store_true",
+                    help="also provision the opt-in {poll}__resend index for "
+                         "self-serve /resend (stores each member's link + on-record "
+                         "contacts in Firestore; --write only)")
     args = ap.parse_args()
 
     if args.demo:
@@ -279,7 +316,8 @@ def main():
         rows = fetch_rows(args.project, args.roll_dataset, list(mapping),
                           args.limit, args.out_dir)
         db = firestore_bulk_client(args.fs_project) if args.write else None
-        manifest, idx, skipped = generate(rows, mapping, db=db)
+        manifest, idx, skipped = generate(rows, mapping, db=db,
+                                          resend_index=args.resend_index and args.write)
         if db is not None:
             db.flush()
         write_outputs(manifest, idx, skipped, args.out_dir)

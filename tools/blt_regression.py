@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 BLT tabulation regression harness.
 
@@ -31,6 +33,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import stv_tabulate  # noqa: E402
 
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blt_fixtures")
+SCORE_FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "score_fixtures")
+
+
+def run_score(path):
+    """Score fixtures: count under both Score and STAR, check determinism."""
+    text = open(path, encoding="utf-8").read()
+    s1 = stv_tabulate.count_score(text)
+    s2 = stv_tabulate.count_score(text)
+    star = stv_tabulate.count_star(text)
+    pr1 = stv_tabulate.count_star_pr(text)
+    pr2 = stv_tabulate.count_star_pr(text)
+    return {
+        "file": os.path.basename(path),
+        "title": s1["title"],
+        "seats": s1["seats"],
+        "max_score": s1["max_score"],
+        "valid_ballots": s1["valid_ballots"],
+        "score_winners": s1["winners"],
+        "star_winners": star["winners"],
+        "starpr_winners": pr1["winners"],
+        "deterministic": s1["winners"] == s2["winners"]
+                         and pr1["winners"] == pr2["winners"],
+        "seats_filled_ok": len(s1["winners"]) == s1["seats"]
+                           and len(star["winners"]) == star["seats"]
+                           and len(pr1["winners"]) == pr1["seats"],
+    }
 
 
 def run_one(path):
@@ -73,19 +101,30 @@ def main():
         except Exception as e:
             errors.append({"file": os.path.basename(f), "error": f"{type(e).__name__}: {e}"})
 
+    score_results = []
+    for f in sorted(glob.glob(os.path.join(SCORE_FIX, "*.blt"))):
+        try:
+            score_results.append(run_score(f))
+        except Exception as e:
+            errors.append({"file": os.path.basename(f), "error": f"{type(e).__name__}: {e}"})
+
     summary = {
         "elections": len(results),
         "errors": len(errors),
         "total_ballots": sum(r["ballots"] for r in results),
         "total_weighted_ballots": sum(r["weighted_ballots"] for r in results),
-        "all_deterministic": all(r["deterministic"] for r in results),
-        "all_seats_filled": all(r["seats_filled_ok"] for r in results),
+        "all_deterministic": all(r["deterministic"] for r in results)
+                             and all(r["deterministic"] for r in score_results),
+        "all_seats_filled": all(r["seats_filled_ok"] for r in results)
+                            and all(r["seats_filled_ok"] for r in score_results),
         "meek_agreements": sum(1 for r in results if r["meek_matches_scottish"]),
         "meek_comparisons": sum(1 for r in results if r["meek_matches_scottish"] is not None),
+        "score_elections": len(score_results),
     }
 
     if as_json:
-        print(json.dumps({"summary": summary, "results": results, "errors": errors}, indent=2))
+        print(json.dumps({"summary": summary, "results": results,
+                          "score_results": score_results, "errors": errors}, indent=2))
         return
 
     print(f"\nBLT REGRESSION — {len(files)} real election files\n" + "=" * 78)
@@ -97,6 +136,15 @@ def main():
         print(f"{flag}{r['file']:<32} {r['candidates']:>2}c/{r['seats']}s  "
               f"{r['ballots']:>5} ballots  {r['stages']:>2} stages{meek}")
         print(f"     winners: {', '.join(r['winners'])}")
+    if score_results:
+        print("-" * 78 + "\nSCORE / STAR fixtures")
+        for r in score_results:
+            flag = "OK " if (r["deterministic"] and r["seats_filled_ok"]) else "!! "
+            print(f"{flag}{r['file']:<32} {r['seats']}s max{r['max_score']}  "
+                  f"{r['valid_ballots']:>4} ballots")
+            print(f"     score:   {', '.join(r['score_winners'])}")
+            print(f"     STAR:    {', '.join(r['star_winners'])}")
+            print(f"     STAR-PR: {', '.join(r['starpr_winners'])}")
     for e in errors:
         print(f"ERR {e['file']}: {e['error']}")
     print("=" * 78)
@@ -104,7 +152,8 @@ def main():
           f"ballots: {summary['total_ballots']} ({summary['total_weighted_ballots']} weighted)")
     print(f"deterministic: {summary['all_deterministic']}  "
           f"seats filled: {summary['all_seats_filled']}  "
-          f"Meek≈Scottish: {summary['meek_agreements']}/{summary['meek_comparisons']}")
+          f"Meek≈Scottish: {summary['meek_agreements']}/{summary['meek_comparisons']}  "
+          f"score/STAR fixtures: {summary['score_elections']}")
     sys.exit(1 if errors or not summary["all_deterministic"] else 0)
 
 

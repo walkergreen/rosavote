@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Offline smoke test for the Chapter Member Ballot service — no GCP needed.
 Stubs google.cloud.firestore, then exercises every route and policy:
@@ -41,6 +43,8 @@ class FakeRef:
         WRITES.append((self.coll, d))
     def update(self, d):
         DOCS[(self.coll, self.key)].update(d)
+    def delete(self):
+        DOCS.pop((self.coll, self.key), None)
 
 
 class FakeQuery:
@@ -127,11 +131,26 @@ for pid in vote_service.CHAPTERS:
     ok(c.get(f"/p/{pid}/").status_code == 200, f"page {pid}")
 ok(c.get("/p/nope/").status_code == 404, "unknown poll 404")
 
+# canonical-host redirect (.com -> .org). Off by default; on when CANONICAL_HOST set.
+ok(c.get("/", headers={"Host": "rosavote.com"}).status_code == 200,
+   "no redirect when CANONICAL_HOST is unset")
+vote_service.CANONICAL_HOST = "vote.rosavote.org"
+try:
+    rr = c.get("/methods?x=1", headers={"Host": "rosavote.com"})
+    ok(rr.status_code == 301 and rr.headers["Location"] == "https://vote.rosavote.org/methods?x=1",
+       "non-canonical host 301-redirects to CANONICAL_HOST, preserving path+query")
+    ok(c.get("/", headers={"Host": "vote.rosavote.org"}).status_code == 200,
+       "canonical host passes through")
+    ok(c.get("/.well-known/acme-challenge/tok", headers={"Host": "rosavote.com"}).status_code != 301,
+       "ACME challenge path is never redirected")
+finally:
+    vote_service.CANONICAL_HOST = ""
+
 # ballot page structure
 b = c.get("/p/debs_endorsement__nyc/").data.decode()
 ok(b.index("How your votes are seen") < b.index("Question 1 of 8"), "disclosure before Q1")
 ok(all(x in b for x in ["Chapter Poll", "Convention Delegates", "Local Issues",
-                        "two-count method", "Meyer London"]), "sections + slate")
+                        "expanded count", "Meyer London"]), "sections + slate")
 
 # vote: identity-linked main record, secret delegate record
 r = c.post("/p/debs_endorsement__nyc/vote", json={"code": "A" * 16, "answers": GOOD})
@@ -349,6 +368,178 @@ ok(c.post("/p/special_ref/vote", json={"code": "B" * 16, "answers": {
 ok(c.post("/p/special_ref/vote", json={"code": "B" * 16, "answers": {
     "measure": "NO", "officer": ["ZZ"], "why": ""}}).status_code == 400,
    "unknown ranked option 400")
+
+# ---- SCORE / STAR voting -------------------------------------------------
+SCORE_QS = [{"key": "delegates", "type": "score", "title": "At-large delegates",
+             "seats": 2, "max_score": 2, "method": "score",
+             "constraints": [{"tag": "man", "max": 1, "label": "max 1 man"}],
+             "options": [{"id": "AA", "name": "Ada", "tags": []},
+                         {"id": "BB", "name": "Ben", "tags": ["man"]},
+                         {"id": "CC", "name": "Cy", "tags": ["man"]}]}]
+r = c.post("/admin/api/polls/score_ref", headers=hdr, json={
+    "name": "Score Delegates", "timezone": "America/Chicago",
+    "opens_at": "2020-01-01T00:00", "closes_at": "2099-01-01T00:00",
+    "questions": SCORE_QS})
+ok(r.status_code == 200, "score poll saves")
+sp3 = c.get("/p/score_ref/").data.decode()
+ok(all(x in sp3 for x in ['data-type="score"', "vk-score-b", "Disapprove", "Approve", "Ada"]),
+   "score ballot renders a 0–2 rating grid with labels")
+before_s = len(WRITES)
+r = c.post("/p/score_ref/vote", json={"code": "S" * 16, "answers": {
+    "delegates": {"AA": 2, "BB": 2, "CC": 1}}})
+ok(r.status_code == 200 and r.get_json()["status"] == "recorded", "score vote (dict answer) accepted")
+sm = next(d for coll, d in WRITES[before_s:] if coll == "score_ref__ballots")
+ok(sm["answers"]["delegates"] == {"AA": 2, "BB": 2, "CC": 1}, "score answer stored as {id:score}")
+ok(c.post("/p/score_ref/vote", json={"code": "S" * 16, "answers": {
+    "delegates": {"AA": 5, "BB": 0, "CC": 0}}}).status_code == 400, "out-of-range score 400")
+ok(c.post("/p/score_ref/vote", json={"code": "S" * 16, "answers": {
+    "delegates": {"AA": 2, "BB": 1}}}).status_code == 400, "partial score (require_full) 400")
+# a few more ballots so the quota-constrained count has something to chew on
+for i, sc in enumerate([{"AA": 2, "BB": 2, "CC": 2}, {"AA": 1, "BB": 2, "CC": 2},
+                        {"AA": 2, "BB": 1, "CC": 2}]):
+    DOCS[("score_ref__ballots", f"sb{i}")] = {"answers": {"delegates": sc}, "code_hash": f"sh{i}"}
+res_s = vote_service.compute_results("score_ref", DOCS[("config__polls", "score_ref")])
+sq = res_s["questions"][0]
+ok(sq["type"] == "score" and "Score voting" in sq["method_used"], "score results computed")
+ok(len(sq["winners"]) == 2 and sum(1 for w in sq["winners"] if w in ("Ben", "Cy")) <= 1,
+   "score max-1-man quota honoured in results")
+import stv_tabulate as _stv  # noqa: E402
+star_res = _stv.count_star(
+    vote_service._scores_text([({"delegates": {"AA": 2, "BB": 0, "CC": 1}}, 1)],
+                              "delegates", SCORE_QS[0]["options"], 1, 2))
+ok(star_res["winners"] == ["Ada"], "STAR count runs on in-memory score text")
+# STAR-PR proportionality + MNTV
+pr = _stv.count_star_pr("6 5 5\n6 1:5 2:5 3:5 4:0 5:0 6:0 0\n4 4:5 5:5 6:0 1:0 2:0 3:0 0\n0\n"
+                        '"A1"\n"A2"\n"A3"\n"B1"\n"B2"\n"B3"\n"C"\n')
+ok(sum(1 for w in pr["winners"] if w.startswith("A")) == 3
+   and sum(1 for w in pr["winners"] if w.startswith("B")) == 2,
+   "STAR-PR (Allocated Score) gives a cohesive minority its proportional seats (3A/2B)")
+mn = _stv.count_alternative("4 2\n5 1 2 0\n3 3 4 0\n0\n\"W\"\n\"X\"\n\"Y\"\n\"Z\"\n\"R\"\n", "mntv")
+ok(mn["winners"] == ["W", "X"], "MNTV / block plurality preview counts top-seats votes")
+ok("star_pr" in _stv.SCORE_METHODS and "mntv" in _stv.ALT_METHODS, "new methods registered")
+
+# ---- Advanced/niche comparison methods -----------------------------------
+# Condorcet cycle-free set: A beats B beats C, A beats C -> Schulze order A,B,C.
+_advblt = ('3 1\n'
+           '5 1 2 3 0\n'   # A>B>C
+           '4 2 3 1 0\n'   # B>C>A
+           '3 3 1 2 0\n'   # C>A>B
+           '0\n"A"\n"B"\n"C"\n"E"\n')
+_sch = _stv.count_alternative(_advblt, "schulze")
+ok(_sch["winners"][0] == "A" and set(_sch["winners"]) <= {"A", "B", "C"},
+   "Schulze picks the Condorcet-style beatpath winner")
+_spav = _stv.count_alternative('4 2\n4 1 2 0\n2 3 4 0\n0\n"P"\n"Q"\n"R"\n"S"\n"E"\n', "spav")
+ok(len(_spav["winners"]) == 2 and "P" in _spav["winners"],
+   "SPAV fills seats sequentially with satisfaction down-weighting")
+_astv = _stv.count_alternative('4 2\n5 1 2 0\n3 3 4 0\n0\n"W"\n"X"\n"Y"\n"Z"\n"R"\n', "approval_stv")
+ok(len(_astv["winners"]) == 2 and "note" in _astv,
+   "Approval-STV threshold elects to fill the seat count")
+ok(_stv.ADVANCED_ALT_METHODS == ("schulze", "spav", "approval_stv"),
+   "advanced methods registered separately from defaults")
+try:
+    _stv.count_alternative(_advblt, "bogus_method")
+    ok(False, "unknown method rejected")
+except ValueError:
+    ok(True, "unknown method rejected")
+
+# ---- YDSA NCC full-body quota (Meek + local co-chair reservation) --------
+NCC_QS = [
+    {"key": "cochairs", "type": "ranked", "method": "meek", "title": "NCC Co-Chairs",
+     "seats": 2, "quota_group": "ncc", "shuffle": False,
+     "constraints": [{"tag": "non_cis_man", "min": 1, "local": True,
+                      "label": "one co-chair a non-cis man"}],
+     "options": [{"id": "M1", "name": "Cis Man A", "tags": []},
+                 {"id": "M2", "name": "Cis Man B", "tags": []},
+                 {"id": "N1", "name": "Non-cis C", "tags": ["non_cis_man"]}]},
+    {"key": "atlarge", "type": "ranked", "method": "meek", "title": "NCC At-Large",
+     "seats": 2, "quota_group": "ncc", "shuffle": False,
+     "options": [{"id": "X1", "name": "Al One", "tags": ["poc"]},
+                 {"id": "X2", "name": "Al Two", "tags": ["non_cis_man"]}]},
+]
+r = c.post("/admin/api/polls/ncc_ref", headers=hdr, json={
+    "name": "YDSA NCC", "timezone": "UTC",
+    "opens_at": "2020-01-01T00:00", "closes_at": "2099-01-01T00:00",
+    "questions": NCC_QS,
+    "quota_groups": {"ncc": [{"tag": "non_cis_man", "min": 2, "label": "≥2 non-cis men (body-wide)"}]}})
+ok(r.status_code == 200, "YDSA NCC full-body config (Meek + local co-chair rule) saves")
+# co-chair ballots: cis men get the most first-prefs; local rule must still seat N1
+for i, rk in enumerate(["M1", "M2"] * 4 + ["N1"]):
+    DOCS[("ncc_ref__ballots", f"nb{i}")] = {"answers": {"cochairs": [rk], "atlarge": ["X1"]},
+                                            "code_hash": f"nh{i}"}
+ncc_res = vote_service.compute_results("ncc_ref", DOCS[("config__polls", "ncc_ref")])
+cochair = next(q for q in ncc_res["questions"] if q["key"] == "cochairs")
+ok("Non-cis C" in cochair["winners"],
+   "local co-chair quota seats a non-cis man even when cis men lead the first-preference count")
+
+# blank / all-abstain ballot summary
+ok(vote_service._is_blank_answer(["ABSTAIN"], "ranked")
+   and vote_service._is_blank_answer([], "multi")
+   and vote_service._is_blank_answer("ABSTAIN", "score")
+   and vote_service._is_blank_answer("ABSTAIN", "yesno")
+   and not vote_service._is_blank_answer(["AA"], "ranked"),
+   "_is_blank_answer detects empty/abstain across types")
+for i, sc in enumerate([{"delegates": {"AA": 2, "BB": 1, "CC": 0}},   # real
+                        {"delegates": "ABSTAIN"}, {"delegates": {}}]):  # 2 blank
+    DOCS[("score_ref__ballots", f"blk{i}")] = {"answers": sc, "code_hash": f"bh{i}"}
+res_b = vote_service.compute_results("score_ref", DOCS[("config__polls", "score_ref")])
+qb = res_b["questions"][0]
+ok(res_b.get("blank_ballots", 0) >= 2 and qb.get("blank", 0) >= 2,
+   "results report fully-blank ballots + per-question blank/abstain counts")
+
+# ---- cross-contest elimination (Metro DC: officer winner out of at-large) --
+ELIM_QS = [
+    {"key": "officer", "type": "ranked", "title": "Officer", "seats": 1, "shuffle": False,
+     "options": [{"id": "PAT", "name": "Pat"}, {"id": "QUI", "name": "Quinn"}]},
+    {"key": "atlarge", "type": "ranked", "title": "At-Large", "seats": 2, "shuffle": False,
+     "eliminate_winners_of": ["officer"],
+     "options": [{"id": "PAT", "name": "Pat"}, {"id": "QUI", "name": "Quinn"}, {"id": "RAE", "name": "Rae"}]},
+]
+r = c.post("/admin/api/polls/elim_ref", headers=hdr, json={
+    "name": "Elim", "timezone": "UTC", "opens_at": "2020-01-01T00:00",
+    "closes_at": "2099-01-01T00:00", "questions": ELIM_QS})
+ok(r.status_code == 200, "cross-contest elimination config saves (eliminate_winners_of)")
+ok(c.post("/admin/api/polls/elim_bad", headers=hdr, json={
+    "name": "Bad", "questions": [{"key": "a", "type": "ranked", "title": "A", "seats": 1,
+    "eliminate_winners_of": ["nonexistent"], "options": [{"id": "XX", "name": "X"}]}]
+    }).status_code == 400, "eliminate_winners_of rejects unknown/forward references")
+# Pat wins the officer seat; must be withdrawn from at-large
+for i in range(5):
+    DOCS[("elim_ref__ballots", f"eb{i}")] = {"answers": {"officer": ["PAT"], "atlarge": ["PAT", "QUI"]},
+                                             "code_hash": f"eh{i}"}
+for i in range(3):
+    DOCS[("elim_ref__ballots", f"ec{i}")] = {"answers": {"officer": ["QUI"], "atlarge": ["RAE", "QUI"]},
+                                             "code_hash": f"ehc{i}"}
+elim_res = vote_service.compute_results("elim_ref", DOCS[("config__polls", "elim_ref")])
+alq = next(q for q in elim_res["questions"] if q["key"] == "atlarge")
+ok("Pat" not in alq["winners"] and alq.get("eliminated") == ["Pat"],
+   "officer winner (Pat) is eliminated from the at-large count")
+
+# ---- archive / unarchive --------------------------------------------------
+ok(c.post("/admin/api/polls/special_ref/archive", headers=hdr, json={}).status_code == 200,
+   "national admin can archive a poll")
+ok(DOCS[("config__polls", "special_ref")].get("archived") is True, "archive flag persisted")
+listed = c.get("/admin/api/polls", headers=hdr).get_json()
+ok(listed.get("special_ref", {}).get("archived") is True,
+   "admin poll list surfaces archived polls with a flag")
+ok("special_ref" not in vote_service.load_polls(force=True),
+   "archived poll leaves the active voting/public set")
+ok(c.post("/admin/api/polls/special_ref/unarchive", headers=hdr, json={}).status_code == 200
+   and DOCS[("config__polls", "special_ref")].get("archived") is False, "unarchive restores it")
+ok(c.post("/admin/api/polls/special_ref/archive", headers=chi_hdr, json={}).status_code == 403,
+   "chapter token cannot archive")
+
+# ---- stale published-results cache is cleared on config change ------------
+# simulate a poll that was published early (frozen doc holds old content), then
+# edited — the frozen doc + cache must be dropped so it can't serve stale data.
+DOCS[("elim_ref__published", "results")] = {"json": '{"stale": "demo"}', "generated_at": 1}
+vote_service._pub_cache["elim_ref"] = (9e18, {"stale": "demo"})  # far-future -> would hit
+r = c.post("/admin/api/polls/elim_ref", headers=hdr, json={
+    "name": "Elim v2", "timezone": "UTC", "opens_at": "2020-01-01T00:00",
+    "closes_at": "2099-01-01T00:00", "questions": ELIM_QS})
+ok(r.status_code == 200, "re-save of an unpublished poll succeeds")
+ok(("elim_ref__published", "results") not in DOCS
+   and "elim_ref" not in vote_service._pub_cache,
+   "editing a poll's config clears its stale frozen published results + cache")
 
 # builder schema validation
 bad_qs = [{"key": "dup", "type": "yesno", "title": "A"},
@@ -810,6 +1001,18 @@ ok(c.post("/admin/api/polls/rf_test", headers=chi_hdr,
 acc = c.get("/accuracy").data.decode()
 ok(c.get("/accuracy").status_code == 200 and "23 / 23" in acc and "{title}" not in acc,
    "accuracy page renders with the OpaVote anchor")
+# AGPL §13 source-offer link present + no unresolved placeholders
+ok("Source (AGPL-3.0)" in sp and "__SOURCE_URL__" not in sp and "{SOURCE_URL}" not in sp,
+   "splash footer carries the AGPL-3.0 source-code link (§13 network-use offer)")
+terms_html = c.get("/terms").data.decode()
+ok("agpl-3.0" in terms_html.lower() and "source code" in terms_html
+   and "__SOURCE_URL__" not in terms_html,
+   "legal pages carry the AGPL source-code offer")
+meth = c.get("/methods").data.decode()
+ok(c.get("/methods").status_code == 200 and "{title}" not in acc
+   and all(x in meth for x in ["Scottish STV", "STAR-PR", "MNTV / block plurality",
+                               "Official count", "Best for:"]),
+   "voting-methods page renders every method with pros/cons")
 # run the regression harness inline (deterministic, no network)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 import blt_regression  # noqa: E402
@@ -831,5 +1034,158 @@ api_html = c.get("/api").data.decode()
 ok(c.get("/api").status_code == 200 and "API Reference" in api_html
    and "/admin/api/polls" in api_html and "{title}" not in api_html,
    "API reference page renders")
+
+# ---- code delivery (Mailgun email + Scale to Win SMS) ----
+import send_codes as _sc  # noqa: E402
+
+
+class _FakeResp:
+    def __init__(self, code): self.status_code, self.text = code, ""
+
+
+class _FakeHTTP:
+    def __init__(self, code=200): self.code, self.calls = code, []
+    def post(self, url, **kw): self.calls.append(url); return _FakeResp(self.code)
+
+
+import tempfile as _tmp  # noqa: E402
+_d = _tmp.mkdtemp()
+_rows = [{"member_id": f"M{i}", "poll_id": "p", "chapter": "x", "channel": "email",
+          "destination": f"m{i}@ex.org", "vote_link": f"https://v/p/p/v/C{i}"} for i in range(3)]
+_rows.append({"member_id": "S1", "poll_id": "p", "chapter": "x", "channel": "sms",
+              "destination": "+15550000000", "vote_link": "https://v/p/p/v/S1"})
+_hm = _FakeHTTP(200)
+_mail = _sc.senders.MailgunSender(domain="d", api_key="k", http=_hm)
+_stw = _sc.senders.ScaleToWinSender(api_url="https://stw", api_key="k", http=_FakeHTTP(200))
+_c = _sc.run(_rows, _d, True, True, 0, 1000, False, False, mail=_mail, sms=_stw, clock=lambda: 1)
+ok(_c["email_sent"] == 3 and _c["sms_sent"] == 1 and len(_hm.calls) == 1,
+   "send_codes: 3 emails delivered in ONE batched Mailgun call + 1 STW SMS")
+_c2 = _sc.run(_rows, _d, True, True, 0, 1000, False, False, mail=_mail, sms=_stw, clock=lambda: 2)
+ok(_c2["skipped_done"] == 4 and _c2["email_sent"] == 0,
+   "send_codes: re-run is idempotent (sent-log skips delivered members)")
+_stwx = _sc.senders.ScaleToWinSender(api_url="", api_key="")
+_c3 = _sc.run(_rows, _d + "/x", False, True, 0, 1000, False, False, sms=_stwx, clock=lambda: 3)
+ok(_c3["sms_exported"] == 1, "send_codes: unconfigured STW falls back to campaign-CSV export")
+# Twilio transactional one-off SMS
+_htw = _FakeHTTP(201)  # Twilio returns 201 Created
+_tw = _sc.senders.TwilioSender(account_sid="AC", auth_token="t", from_="+15550000000", http=_htw)
+ok(_tw.configured() and _tw.send_one("+15551234567", "https://v/x").ok and len(_htw.calls) == 1,
+   "TwilioSender sends a transactional one-off SMS (201)")
+import os as _os  # noqa: E402
+_os.environ.update(TWILIO_ACCOUNT_SID="AC", TWILIO_AUTH_TOKEN="t", TWILIO_FROM="+1555")
+ok(isinstance(_sc.senders.sms_sender(), _sc.senders.TwilioSender),
+   "sms_sender() prefers Twilio (transactional) when configured")
+for _k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"): _os.environ.pop(_k, None)
+ok(isinstance(_sc.senders.sms_sender(), _sc.senders.ScaleToWinSender),
+   "sms_sender() falls back to Scale to Win when Twilio unset")
+
+# ---- self-serve /resend (enumeration-safe, throttled, on-record only) ----
+import hashlib as _hl  # noqa: E402
+# unknown contact -> generic ok, no send
+_sent = []
+vote_service._deliver_resend = lambda link, dests: _sent.append((link, tuple(dests)))
+r = c.post("/p/debs_endorsement__nyc/resend", json={"contact": "nobody@nowhere.org"})
+ok(r.status_code == 200 and r.get_json() == {"status": "ok"} and not _sent,
+   "/resend on an unknown contact is enumeration-safe (generic ok, no send)")
+# provisioned contact -> re-sends the member's link to their ON-RECORD contacts
+_pid = "debs_endorsement__nyc"
+_ch = _hl.sha256(f"{_pid}|voter@example.org".encode()).hexdigest()
+DOCS[(f"{_pid}__resend", _ch)] = {"link": "https://v/p/x/v/CODE",
+                                  "dests": ["voter@example.org", "+15550001111"]}
+r = c.post(f"/p/{_pid}/resend", json={"contact": "Voter@Example.org"})  # case-normalized
+ok(r.status_code == 200 and _sent and _sent[-1][0] == "https://v/p/x/v/CODE"
+   and "voter@example.org" in _sent[-1][1],
+   "/resend delivers a matched member's link to their on-record contacts")
+# immediate second attempt is throttled (no new send)
+_before = len(_sent)
+c.post(f"/p/{_pid}/resend", json={"contact": "voter@example.org"})
+ok(len(_sent) == _before, "/resend is rate-limited (second attempt within cooldown makes no send)")
+
+# ---- voter "verify your vote" guide page ----
+vv = c.get("/p/debs_endorsement__nyc/verify-vote")
+vvh = vv.data.decode()
+ok(vv.status_code == 200 and "Verify your vote" in vvh
+   and "ballots.csv" in vvh and "chain_head.txt" in vvh and "verify.py" in vvh
+   and "__POLL_ID__" not in vvh and "__SOURCE_URL__" not in vvh,
+   "verify-vote guide renders both levels + independent-verification files, no leftover placeholders")
+ok(c.get("/p/nope/verify-vote").status_code == 404, "verify-vote 404s on unknown poll")
+
+# demo flag: a finalized DEMO poll stays votable (test votes) while its results page lives
+ok(vote_service.window_state({"finalized": True}) == "closed",
+   "finalized poll is closed by default")
+ok(vote_service.window_state({"finalized": True, "demo": True}) == "open",
+   "finalized DEMO poll stays open for test voting")
+ok(vote_service.window_state({"finalized": True, "demo": True,
+                              "closes_at": 1}) == "closed",
+   "a demo poll still honours an explicit past close date")
+
+# public verification files: build a chain + gate on finalize+publish
+import hashlib as _h2  # noqa: E402
+for i, (rc, ans, nn) in enumerate([("R1", '{"q":"YES"}', "n1"), ("R2", '{"q":"NO"}', "n2")]):
+    rh = _h2.sha256(f"{rc}|{ans}|{nn}".encode()).hexdigest()
+    DOCS[("vf_poll__ballots", f"vb{i}")] = {"receipt": rc, "answers_canon": ans,
+                                            "nonce": nn, "record_hash": rh}
+bcsv, ucsv, head = vote_service._build_verification("vf_poll")
+# independently recompute the chain head from the produced CSV
+_rows = [l for l in bcsv.strip().split("\n")[1:]]
+_prev = "0" * 64
+for _l in _rows:
+    _f = _l.split(",")
+    _prev = _h2.sha256(f"{_prev}|{_f[3]}".encode()).hexdigest()
+ok(_prev + "\n" == head and len(_rows) == 2,
+   "verification ballots.csv chains to a head that independently recomputes")
+ok(c.get("/p/debs_endorsement__nyc/verify/ballots.csv").status_code == 409,
+   "verification files 409 until the poll is finalized + published")
+DOCS[("config__polls", "vf_poll")] = {
+    "name": "VF", "finalized": True, "results_published": True,
+    "questions": [{"key": "q", "type": "yesno", "title": "Q"}]}
+vote_service.load_polls(force=True)
+ok(c.get("/p/vf_poll/verify/ballots.csv").status_code == 200
+   and "record_hash" in c.get("/p/vf_poll/verify/ballots.csv").data.decode(),
+   "verification files serve publicly once finalized + published")
+ok(c.get("/p/vf_poll/verify/secrets.env").status_code == 404,
+   "verification route only serves the three known files")
+
+# ---- notification opt-out / opt-in ----
+ok(c.get("/prefs").status_code == 200 and "Notification preferences" in c.get("/prefs").data.decode(),
+   "prefs page renders")
+ok(c.post("/prefs/optout", json={"contact": "Opt@Out.org"}).get_json() == {"status": "ok"},
+   "optout is enumeration-safe (generic ok)")
+ok(vote_service._is_suppressed("opt@out.org") is True,
+   "opt-out suppresses the (normalized) contact")
+ok(c.post("/prefs/optin", json={"contact": "opt@out.org"}).get_json() == {"status": "ok"}
+   and vote_service._is_suppressed("opt@out.org") is False, "opt-in re-enables it")
+# suppressed contact is skipped by the mass send + the in-app resend
+_sup = _sc.run([{"member_id": "Z", "poll_id": "p", "chapter": "x", "channel": "email",
+                 "destination": "opt@out.org", "vote_link": "https://v"}],
+               _tmp.mkdtemp(), True, False, 0, 1000, False, True,
+               suppressed={"opt@out.org"}, clock=lambda: 1)
+ok(_sup["skipped_suppressed"] == 1 and _sup["email_sent"] == 0,
+   "send_codes skips a suppressed contact")
+
+# ---- alternates: expanded-count vs replacement (winners-removed) ----
+# 4 voters A>D, 4 voters B>D, 3 voters C. 2 seats + 1 alternate.
+# Delegates: A, B. Expanded alt = C (next in line). Replacement alt = D
+# (A+B blocs' second choice), per the DSA convention-guide argument.
+_altopts = [{"id": x, "name": x} for x in ("AA", "BB", "CC", "DD", "EE")]
+for i in range(4):
+    DOCS[("alt_demo__ballots", f"a{i}")] = {"answers": {"del": ["AA", "DD"]}, "code_hash": f"ca{i}"}
+for i in range(4):
+    DOCS[("alt_demo__ballots", f"b{i}")] = {"answers": {"del": ["BB", "DD"]}, "code_hash": f"cb{i}"}
+for i in range(3):
+    DOCS[("alt_demo__ballots", f"c{i}")] = {"answers": {"del": ["CC"]}, "code_hash": f"cc{i}"}
+_altq = {"key": "del", "type": "ranked", "title": "Delegates", "seats": 2,
+         "alternates": 1, "shuffle": False, "options": _altopts}
+_exp = vote_service.compute_results("alt_demo", {"questions": [dict(_altq, alternate_method="expanded")]})
+_rep = vote_service.compute_results("alt_demo", {"questions": [dict(_altq, alternate_method="replacement")]})
+_eq, _rq = _exp["questions"][0], _rep["questions"][0]
+ok(set(_eq["winners"]) == {"AA", "BB"} and set(_rq["winners"]) == {"AA", "BB"},
+   "both alternate methods elect the same delegates")
+ok(_eq["alternates"] == ["CC"] and _rq["alternates"] == ["DD"],
+   "expanded alt = next-in-line (C); replacement alt = winners-removed re-run (D) — they diverge")
+ok(c.post("/admin/api/polls/special_ref2", headers=hdr, json={
+    "name": "X", "questions": [{"key": "d", "type": "ranked", "title": "D", "seats": 1,
+    "alternates": 1, "alternate_method": "nonsense", "options": [{"id": "AA", "name": "A"}]}]
+    }).status_code == 400, "invalid alternate_method rejected")
 
 print(f"SMOKE TEST: all {passed} checks passed")

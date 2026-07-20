@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Walker Green
 """
 Multi-chapter referendum vote service.
 
@@ -27,11 +29,38 @@ import secrets
 import time
 from datetime import date, timedelta
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, redirect
 from google.cloud import firestore
 from google.api_core import exceptions as gcloud_exc
 
 app = Flask(__name__)
+
+# Canonical host. When both rosavote.com and rosavote.org point at this service,
+# any request to a non-canonical host is 301-redirected to CANONICAL_HOST — so
+# the .com → .org redirect works regardless of registrar/CDN. Set CANONICAL_HOST
+# (e.g. "vote.rosavote.org") in the environment; unset = no redirect (dev/Cloud
+# Run default URL). Health checks and the ACME challenge path are never redirected.
+CANONICAL_HOST = os.environ.get("CANONICAL_HOST", "").strip().lower()
+
+# AGPL-3.0 §13: users interacting with the (possibly modified) program over a
+# network must be offered its Corresponding Source. SOURCE_URL is that public
+# offer — surfaced in the footer of every page. Set it to the repository (or a
+# tagged release) the running deployment was built from.
+SOURCE_URL = os.environ.get(
+    "SOURCE_URL", "https://github.com/walkergreen/rosavote")
+
+
+@app.before_request
+def _canonical_host_redirect():
+    if not CANONICAL_HOST:
+        return None
+    host = (request.host or "").split(":", 1)[0].lower()
+    if not host or host == CANONICAL_HOST:
+        return None
+    if request.path.startswith("/.well-known/"):   # ACME / domain verification
+        return None
+    target = f"https://{CANONICAL_HOST}{request.full_path.rstrip('?')}"
+    return redirect(target, code=301)
 
 
 @app.after_request
@@ -62,7 +91,12 @@ class _LazyDB:
 
     def __getattr__(self, name):
         if _LazyDB._client is None:
-            _LazyDB._client = firestore.Client()
+            # FIRESTORE_DATABASE selects a named database (e.g. "staging") so a
+            # staging deployment is fully isolated from production data in the
+            # same project; unset uses the "(default)" database (production).
+            dbname = os.environ.get("FIRESTORE_DATABASE", "").strip()
+            _LazyDB._client = (firestore.Client(database=dbname) if dbname
+                               else firestore.Client())
         return getattr(_LazyDB._client, name)
 
 
@@ -72,7 +106,7 @@ db = _LazyDB()
 # Every poll is an ordered list of QUESTIONS. Types:
 #   yesno  — YES / NO (+ Abstain unless allow_abstain=False)
 #   ranked — Scottish STV; options [{id,name,sub?}], seats, alternates
-#            (alternates>0 => two-count method + over-seat rank styling),
+#            (alternates>0 => expanded/replacement count + over-seat rank styling),
 #            secret=True stores the ranking in the admin-only secret
 #            collection, delegate=True additionally applies Art. V rules,
 #            shuffle=True randomizes option order per page load
@@ -92,7 +126,7 @@ def _q7_note(cfg) -> str:
             f"delegates and {q7['real_alternates']} alternates (2025 apportionment, "
             f"1:60 and 1:10). ") if q7.get("real_delegates") else ""
     total = q7["seats"] + q7["alternates"]
-    return (real + f"<b>How this is counted (two-count method):</b> delegates are "
+    return (real + f"<b>How this is counted (expanded count):</b> delegates are "
             f"decided by a Scottish STV count for {q7['seats']} seats. The same "
             f"ballots are then recounted for {total} seats — anyone elected in "
             "the recount who is not already a delegate becomes an alternate, in "
@@ -242,6 +276,32 @@ def validate_answers(data, cfg) -> tuple[dict, dict]:
             if v != ["ABSTAIN"] and (len(set(v)) != len(v) or not set(v) <= ids):
                 raise ValueError(key)
             answers[key] = v if v == ["ABSTAIN"] else sorted(v)
+        elif typ == "score":
+            ids = {o["id"] for o in q["options"]}
+            max_s = int(q.get("max_score", 2))
+            if v == "ABSTAIN" or v == ["ABSTAIN"]:
+                if not q.get("allow_abstain", True):
+                    raise ValueError(key)
+                answers[key] = "ABSTAIN"
+                continue
+            if not isinstance(v, dict) or not v:
+                raise ValueError(key)
+            scores = {}
+            for oid, s in v.items():
+                oid = str(oid).upper()
+                if oid not in ids:
+                    raise ValueError(key)
+                try:
+                    si = int(s)
+                except (TypeError, ValueError):
+                    raise ValueError(key)
+                if si < 0 or si > max_s:
+                    raise ValueError(key)
+                scores[oid] = si
+            # spec: every candidate must be scored (unless partial allowed)
+            if q.get("require_full", True) and set(scores) != ids:
+                raise ValueError(key)
+            answers[key] = scores
         elif typ == "text":
             comments[key] = str(v or "")[: q.get("max", TEXT_MAX_DEFAULT)]
     return answers, comments
@@ -419,8 +479,12 @@ def fmt_local(ts, cfg) -> str:
 
 
 def window_state(cfg):
-    if cfg.get("finalized"):
-        return "closed"          # finalized never reopens implicitly
+    # A finalized poll never reopens implicitly — EXCEPT a `demo` poll, which
+    # may be finalized (so its results page stays live) yet still accept test
+    # votes for people trying the app. Test-code votes are never stored, so
+    # demo voting can't change the published result.
+    if cfg.get("finalized") and not cfg.get("demo"):
+        return "closed"
     now = time.time()
     if cfg.get("opens_at") and now < cfg["opens_at"]:
         return "not_open"
@@ -502,6 +566,14 @@ def sanitize_html(s) -> str:
     return p.result()
 
 
+# Column labels for the common score scales; the DSA at-large delegate rules
+# use 0/1/2 = disapprove/neutral/approve. Other maxima render numbers only.
+SCORE_LABELS = {
+    2: {0: "Disapprove", 1: "Neutral", 2: "Approve"},
+    5: {0: "Worst", 5: "Best"},
+}
+
+
 def _yesno_options(q):
     subs = q.get("option_subs") or {}
     opts = [{"id": "YES", "name": "Yes", "sub": subs.get("YES", "")},
@@ -519,7 +591,10 @@ _BUBBLE_SVG = ('<svg class="vk-bubble" viewBox="0 0 44 26" aria-hidden="true">'
 def _opt_button(q, opt, marker_html, role="") -> str:
     sub = f'<small>{_esc(opt["sub"])}</small>' if opt.get("sub") else (
         "" if q["type"] == "yesno" else "<small></small>")
-    role_attr = f' role="{role}" aria-checked="false"' if role else ""
+    # explicit accessible name — the marker (bubble/checkbox SVG) is aria-hidden,
+    # so a role=radio/checkbox button needs its name spelled out for screen readers
+    aria = f' aria-label="{_esc(opt["name"])}"' if role else ""
+    role_attr = f' role="{role}" aria-checked="false"{aria}' if role else ""
     size = "" if q["type"] == "yesno" else ' style="font-size:1.35rem;"'
     return (f'<button type="button" class="vk-opt"{role_attr} data-choice="{_esc(opt["id"])}"{size}>'
             f'{marker_html}<span>{_esc(opt["name"])}{sub}</span></button>')
@@ -571,6 +646,38 @@ def _question_html(q, n, total) -> str:
         opts = "".join(_opt_button(q, o, marker, role="checkbox") for o in options)
         out.append(f'<div class="vk-opts" aria-label="Question {n} — {_esc(q["title"])}" '
                    f'data-q="{key}" data-type="multi">{opts}</div>')
+    elif typ == "score":
+        options = list(q["options"])
+        if q.get("shuffle"):
+            random.shuffle(options)
+        max_s = int(q.get("max_score", 2))
+        labels = SCORE_LABELS.get(max_s, {})
+        head = "".join(f'<span class="vk-score-h">{s}'
+                       + (f'<small>{_esc(labels[s])}</small>' if labels.get(s) else "")
+                       + "</span>" for s in range(max_s + 1))
+        rows = []
+        for o in options:
+            cells = "".join(
+                f'<button type="button" class="vk-score-b" data-choice="{_esc(o["id"])}" '
+                f'data-score="{s}" aria-label="{_esc(o["name"])}: {s}'
+                + (f' ({_esc(labels[s])})' if labels.get(s) else "")
+                + f'" role="radio" aria-checked="false">{s}</button>'
+                for s in range(max_s + 1))
+            sub = f'<small>{_esc(o["sub"])}</small>' if o.get("sub") else ""
+            rows.append(f'<div class="vk-score-row" role="radiogroup" '
+                        f'aria-label="{_esc(o["name"])}">'
+                        f'<span class="vk-score-name">{_esc(o["name"])}{sub}</span>'
+                        f'<span class="vk-score-cells">{cells}</span></div>')
+        out.append(f'<div class="vk-score" data-q="{key}" data-type="score" '
+                   f'data-max="{max_s}"><div class="vk-score-legend">'
+                   f'<span class="vk-score-name"></span>'
+                   f'<span class="vk-score-cells">{head}</span></div>'
+                   + "".join(rows) + "</div>")
+        out.append(f'<p class="vk-rank-hint"><span id="hint-{key}" aria-live="polite">'
+                   'Rate every candidate.</span>'
+                   + (f'<button type="button" class="vk-rank-clear" data-clear="{key}">'
+                      'Clear ratings</button>' if q.get("allow_abstain", True) else "")
+                   + "</p>")
     elif typ == "text":
         mx = q.get("max", TEXT_MAX_DEFAULT)
         out.append(f'<label class="vk-label" for="txt-{key}">Your answer (optional, '
@@ -609,13 +716,17 @@ def render_ballot(poll_id: str, cfg: dict, code: str = "") -> str:
         names = {}
         if q["type"] == "yesno":
             names = {o["id"]: o["name"] for o in _yesno_options(q)}
-        elif q["type"] in ("ranked", "multi"):
+        elif q["type"] in ("ranked", "multi", "score"):
             names = {o["id"]: o["name"] for o in q["options"]}
             names.setdefault("ABSTAIN", "Abstain")
         qdef.append({"key": q["key"], "type": q["type"], "n": i + 1,
                      "title": q["title"], "names": names,
                      "seats": q.get("seats", 0) if q.get("alternates") else 0,
-                     "required": q.get("required", q["type"] in ("yesno", "ranked"))})
+                     "max_score": int(q.get("max_score", 2)) if q["type"] == "score" else 0,
+                     "n_opts": len(q.get("options") or []) if q["type"] == "score" else 0,
+                     "allow_abstain": bool(q.get("allow_abstain", True)),
+                     "require_full": bool(q.get("require_full", True)) if q["type"] == "score" else False,
+                     "required": q.get("required", q["type"] in ("yesno", "ranked", "score"))})
 
     html = TEMPLATE.replace("__POLL_ID__", poll_id)
     html = html.replace("__CHAPTER_NAME__", cfg["name"])
@@ -767,6 +878,178 @@ def voted(poll_id):
     return jsonify({"voted": bool(snap.get("used"))}), 200
 
 
+RESEND_COOLDOWN_S = 15 * 60   # one self-serve resend per contact per 15 min
+
+# Notification preferences: a GLOBAL, contact-keyed suppression list (spans
+# elections). A member can stop RosaVote from contacting a given email/phone
+# and re-enable it. SMS carrier STOP/START is handled by the SMS provider; this
+# covers email + a self-serve page, and the delivery paths honor it.
+PREFS_COLL = "notify_prefs"
+
+
+def _contact_hash(contact: str) -> str:
+    return hashlib.sha256(_norm_contact(contact).encode()).hexdigest()
+
+
+def _is_suppressed(contact: str) -> bool:
+    try:
+        d = db.collection(PREFS_COLL).document(_contact_hash(contact)).get()
+        return bool(getattr(d, "exists", False) and (d.to_dict() or {}).get("suppressed"))
+    except Exception:
+        return False
+
+
+def _set_suppressed(contact: str, suppressed: bool):
+    db.collection(PREFS_COLL).document(_contact_hash(contact)).set(
+        {"suppressed": suppressed, "at": firestore.SERVER_TIMESTAMP})
+
+
+@app.post("/prefs/optout")
+def prefs_optout():
+    """Stop contacting an email/phone. Enumeration-safe (always {status:ok});
+    the caller can only act on a contact they can type, and this suppresses
+    delivery to it, never reveals membership."""
+    contact = _norm_contact((request.get_json(silent=True) or {}).get("contact"))
+    if len(contact) >= 3:
+        try:
+            _set_suppressed(contact, True)
+        except Exception:
+            pass
+    return jsonify({"status": "ok"}), 200
+
+
+@app.post("/prefs/optin")
+def prefs_optin():
+    """Re-enable contact to an email/phone."""
+    contact = _norm_contact((request.get_json(silent=True) or {}).get("contact"))
+    if len(contact) >= 3:
+        try:
+            _set_suppressed(contact, False)
+        except Exception:
+            pass
+    return jsonify({"status": "ok"}), 200
+
+
+_PREFS_PAGE = """<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Notification preferences — RosaVote</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml"/>
+<style>body{font:16px/1.55 Georgia,serif;background:#fff5e5;color:#111;margin:0}
+main{max-width:620px;margin:0 auto;padding:22px 18px 60px}
+.banner{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;font-weight:bold;text-transform:uppercase}
+h1{font-family:"Arial Narrow",sans-serif;text-transform:uppercase}
+.card{background:#fff;border:1px solid #000;box-shadow:5px 5px 0 0 #000;padding:14px 16px;margin:14px 0}
+input,button{font:inherit;padding:9px 11px;border:2px solid #000}
+button{font-family:"Arial Narrow",sans-serif;font-weight:bold;text-transform:uppercase;cursor:pointer}
+.out{background:#dd1111;color:#fff5e5}.in{background:#fff}
+.warn{background:#ffe1b2;border:1px solid #000;padding:8px 12px;font-size:.9rem}
+.r{font-weight:bold;margin:8px 0 0}a{color:#dd1111}</style></head><body>
+<div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>RosaVote</div>
+<main><h1>Notification preferences</h1>
+<div class="card">
+<p>Manage whether RosaVote contacts a specific email address or mobile number for
+DSA elections. Enter the contact and choose an option.</p>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+  <input id="cc" placeholder="you@email or 555-123-4567" style="flex:1;min-width:200px"/>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+  <button class="out" id="bout" type="button">Stop contacting this</button>
+  <button class="in" id="bin" type="button">Resume contacting this</button>
+</div>
+<p class="r" id="msg" aria-live="polite"></p>
+<div class="warn"><b>Important:</b> your ballot is delivered by these same channels.
+If you opt an address out, make sure you can still receive your ballot another way
+(email, text, or postcard) — otherwise you may not be able to vote. Opting out of a
+text is also as simple as replying <b>STOP</b>; reply <b>START</b> to resume.</div>
+</div>
+<p><a href="/">&larr; RosaVote</a></p></main>
+<script>
+(function(){function esc(t){return String(t).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
+ function post(path,label){var v=(document.getElementById("cc").value||"").trim();
+  var m=document.getElementById("msg");if(v.length<3){m.textContent="Enter an email or mobile number.";return;}
+  m.textContent="Saving\\u2026";
+  fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contact:v})})
+   .then(function(){m.textContent=label;}).catch(function(){m.textContent="Network error \\u2014 try again.";});}
+ document.getElementById("bout").addEventListener("click",function(){post("/prefs/optout","Done \\u2014 we won't contact that email/number for elections. You can resume anytime here.");});
+ document.getElementById("bin").addEventListener("click",function(){post("/prefs/optin","Done \\u2014 that email/number can receive election messages again.");});
+})();
+</script></body></html>"""
+
+
+@app.get("/prefs")
+def prefs_page():
+    return Response(_PREFS_PAGE.replace("__NONE__", ""), mimetype="text/html")
+
+
+def _norm_contact(c: str) -> str:
+    c = (c or "").strip().lower()
+    if "@" in c:
+        return c
+    return "".join(ch for ch in c if ch.isdigit() or ch == "+")
+
+
+def _deliver_resend(link: str, dests: list):
+    """Re-send an existing ballot link to a member's OWN on-record contacts,
+    via the same channels as the mass send. Failures are swallowed — resend is
+    best-effort and must never leak which contacts exist."""
+    import senders
+    mail = senders.MailgunSender()
+    sms = senders.sms_sender()   # Twilio for one-off SMS if configured
+    for dest in dests:
+        try:
+            if _is_suppressed(dest):
+                continue                 # member opted this contact out
+            if "@" in dest and mail.configured():
+                mail.send_batch([{"email": dest, "link": link}])
+            elif "@" not in dest and sms.configured():
+                sms.send_one(dest, link)
+        except Exception:
+            pass
+
+
+@app.post("/p/<poll_id>/resend")
+def resend_code(poll_id):
+    """Self-serve 'I lost my code'. ENUMERATION-SAFE: always returns the same
+    generic {status:"ok"} whether or not the contact matches a member, so it
+    can't be used to test who's registered. RATE-LIMITED to one send per
+    contact per 15 min. Re-sends the member's EXISTING link only to THEIR
+    on-record contacts (never to the address typed in the form), so it can't
+    redirect a ballot. Requires the chapter to have provisioned a
+    `{poll}__resend` index (contact_hash -> {link, dests}); if it hasn't, the
+    endpoint safely no-ops and members fall back to contacting their chapter."""
+    generic = (jsonify({"status": "ok"}), 200)
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return generic
+    contact = _norm_contact((request.get_json(silent=True) or {}).get("contact"))
+    if len(contact) < 3:
+        return generic
+    ch = hashlib.sha256(f"{poll_id}|{contact}".encode()).hexdigest()
+    now = int(time.time())
+    tref = db.collection(f"{poll_id}__resend_log").document(ch)
+    try:
+        tsnap = tref.get()
+        if getattr(tsnap, "exists", False):
+            if now - int((tsnap.to_dict() or {}).get("at", 0)) < RESEND_COOLDOWN_S:
+                return generic     # throttled — still say "ok"
+        rec = db.collection(f"{poll_id}__resend").document(ch).get()
+    except Exception:
+        return generic
+    if not getattr(rec, "exists", False):
+        return generic            # not provisioned / no match
+    d = rec.to_dict() or {}
+    link, dests = d.get("link"), (d.get("dests") or [])
+    if link and dests:
+        _deliver_resend(link, dests)
+        try:
+            tref.set({"at": now})
+        except Exception:
+            pass
+    return generic
+
+
 RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
 
 
@@ -853,6 +1136,26 @@ def public_results(poll_id):
             inner += (f'<p class="win"><small>{_esc(q.get("method_used") or "Scottish STV")} · {q["valid_ballots"]} valid '
                       f'ballots · quota {q["quota"]} · full round-by-round record held '
                       'by election administration</small></p>')
+        elif q["type"] == "score":
+            inner = ('<p class="win"><b>Elected'
+                     + (f' ({q["seats"]} seats)' if q["seats"] > 1 else "") + ":</b> "
+                     + _esc(", ".join(q["winners"]) or "—") + "</p>")
+            if not q.get("group_partial"):
+                for cn in (q.get("constraints") or []):
+                    bound = f"max {cn['max']}" if "max" in cn else f"min {cn['min']}"
+                    inner += ('<p class="win k">Quota requirement met: '
+                              + _esc(cn.get("label") or f"{bound} {cn['tag']}")
+                              + f' — {cn["elected"]} elected'
+                              + (' (across the full body)' if q.get("quota_group") else '')
+                              + '</p>')
+            sc = q.get("scores") or {}
+            vmax = max(list(sc.values()) + [1])
+            inner += '<p class="k">Total score</p>' + "".join(
+                _pub_bar(n, v, vmax, "" if n in q["winners"] else "b")
+                for n, v in sorted(sc.items(), key=lambda kv: -kv[1]))
+            inner += (f'<p class="win"><small>{_esc(q.get("method_used") or "Score voting")} · '
+                      f'{q["valid_ballots"]} valid ballots · scores 0–{q.get("max_score", 2)} · '
+                      'full record held by election administration</small></p>')
         elif q["type"] == "multi":
             vmax = max(list(q["counts"].values()) + [1])
             inner = "".join(_pub_bar(n, v, vmax) for n, v in q["counts"].items())
@@ -863,8 +1166,8 @@ def public_results(poll_id):
     meta = (f'<div class="card"><p class="win">{res["ballots_counted"]} ballots counted'
             + (" · weighted election (ballots count at each voter's assigned weight)"
                if res.get("weighted") else "")
-            + '. Voters can confirm their own ballot was recorded at any time with '
-            'their receipt code.</p></div>')
+            + '. Voters can confirm their own ballot and independently recompute this '
+            f'result — see <a href="/p/{poll_id}/verify-vote">Verify your vote</a>.</p></div>')
     return Response(_PUB_SHELL.format(title=_esc(res.get("name") or poll_id),
                                       body=meta + "".join(cards)),
                     mimetype="text/html")
@@ -892,6 +1195,220 @@ def verify_receipt(poll_id):
         st = (prov.to_dict() or {}).get("status", "pending")
         return jsonify({"found": True, "status": f"provisional_{st}"}), 200
     return jsonify({"found": False}), 404
+
+
+_VERIFY_PAGE = """<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Verify your vote — __POLL_NAME__ — RosaVote</title>
+<link rel="icon" href="/logo.svg" type="image/svg+xml"/>
+<style>
+ body{font:16px/1.55 Georgia,serif;background:#fff5e5;color:#111;margin:0}
+ main{max-width:680px;margin:0 auto;padding:22px 18px 60px}
+ .banner{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;font-weight:bold;text-transform:uppercase}
+ h1{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:.4em 0}
+ h2{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;font-size:1.15rem;margin:1.4em 0 .3em}
+ .card{background:#fff;border:1px solid #000;box-shadow:5px 5px 0 0 #000;padding:14px 16px;margin:14px 0}
+ code{background:#f3ead9;padding:1px 5px}
+ ol{margin:6px 0 6px 20px}li{margin:0 0 6px}
+ input,button{font:inherit;padding:9px 11px;border:2px solid #000}
+ button{background:#dd1111;color:#fff5e5;font-family:"Arial Narrow",sans-serif;font-weight:bold;text-transform:uppercase;cursor:pointer}
+ .r{margin:8px 0 0;font-weight:bold}.ok{color:#0a7d928}.mut{color:#555;font-size:.9rem}
+ a{color:#dd1111}
+</style></head><body>
+<div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>RosaVote</div>
+<main>
+<h1>Verify your vote</h1>
+<p class="mut">__POLL_NAME__</p>
+<p>You don't have to take anyone's word for it. There are two independent checks:
+one you can do right now, and one anyone can do after the election closes.</p>
+
+<div class="card">
+<h2>1 · Confirm your ballot was recorded</h2>
+<p>Enter the <b>receipt code</b> shown when you voted. This confirms your ballot is
+stored — it never reveals how you voted or who you are.</p>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+  <input id="rc" placeholder="e.g. A1B2C3D4" style="flex:1;min-width:170px" autocapitalize="characters"/>
+  <button id="rb" type="button">Check</button>
+</div>
+<p class="r" id="rr" aria-live="polite"></p>
+<p class="mut">Lost your receipt? It was on your confirmation screen. If you can't find it,
+your chapter's elections committee can look up your ballot status for you.</p>
+</div>
+
+<div class="card">
+<h2>2 · Independently verify the whole count (after close)</h2>
+<p>After voting closes, the election administrators publish three files that let
+<b>anyone</b> — you, any candidate, any observer — recompute the entire result from
+scratch, with no access to the live system:</p>
+<ul>
+ <li><code>ballots.csv</code> — every anonymous ballot: its receipt, the exact votes on it, and a tamper-evidence hash.</li>
+ <li><code>used_codes.csv</code> — the voting codes that were used (hashed, no identities).</li>
+ <li><code>chain_head.txt</code> — a single fingerprint of the whole ballot set, posted publicly at close.</li>
+</ul>
+<p>With those files you can:</p>
+<ol>
+ <li><b>Find your own receipt</b> in <code>ballots.csv</code> and confirm the votes next to it are exactly what you cast.</li>
+ <li><b>Recompute the fingerprint</b> from <code>ballots.csv</code> and check it matches the published <code>chain_head.txt</code> — if even one ballot were changed, added, or removed, it wouldn't match.</li>
+ <li><b>Recount it yourself</b> — run the open-source tally on <code>ballots.csv</code> (or upload the published <code>.blt</code> to OpaVote) and confirm the winners.</li>
+ <li><b>Check turnout</b> — the number of ballots equals the number of used codes, and every used code was on a list published <i>before</i> voting opened (so no codes were manufactured).</li>
+</ol>
+<p>A ready-made checker (Python standard library only) does steps 2–4 automatically:</p>
+<p><code>python verify.py ballots.csv used_codes.csv chain_head.txt</code></p>
+<p><a href="__SOURCE_URL__">Get <code>verify.py</code> and the full source (AGPL-3.0)</a> ·
+<a href="/accuracy">how the tabulation is tested</a> ·
+<a href="/methods">the counting methods</a></p>
+<hr style="border:none;border-top:1px solid #ddd;margin:14px 0"/>
+<p><b>Prefer not to run anything?</b> Verify the tamper-evidence fingerprint right here —
+your browser downloads the published ballots and recomputes the whole chain locally.</p>
+<p><button id="vb" type="button">Verify the chain in my browser</button></p>
+<p class="r" id="vbr" aria-live="polite"></p>
+<p class="mut">Published files:
+ <a href="/p/__POLL_ID__/verify/ballots.csv"><code>ballots.csv</code></a> ·
+ <a href="/p/__POLL_ID__/verify/used_codes.csv"><code>used_codes.csv</code></a> ·
+ <a href="/p/__POLL_ID__/verify/chain_head.txt"><code>chain_head.txt</code></a>
+ <span id="vfnote"></span></p>
+</div>
+
+<div class="card">
+<h2>What this does and doesn't prove</h2>
+<p><b>It proves</b> your ballot is in the published record with your votes, unaltered;
+that no ballot was tampered with; and that the announced winners follow from the
+published ballots. That's a stronger guarantee than "trust us" — it's independently
+reproducible.</p>
+<p class="mut"><b>Honest limits:</b> because you can look up your receipt and see your
+own votes, you could also show them to someone else — so keep your receipt private if
+you'd prefer your vote stay between you and the record. And this confirms what was
+<i>recorded</i>; verifying that your device submitted exactly what you intended is the
+one step you perform yourself, at the moment you vote.</p>
+</div>
+<p><a href="/p/__POLL_ID__/">&larr; Back to the ballot</a></p>
+</main>
+<script>
+(function(){var b=document.getElementById("rb"),i=document.getElementById("rc"),r=document.getElementById("rr");
+ function esc(t){return String(t).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
+ function check(){var v=(i.value||"").trim().toUpperCase();if(v.length<4){r.textContent="Enter your receipt code.";return;}
+  r.textContent="Checking…";
+  fetch("/p/__POLL_ID__/verify?receipt="+encodeURIComponent(v)).then(function(x){return x.json();}).then(function(d){
+   if(d.found&&d.status==="recorded")r.innerHTML="\\u2713 Found — your ballot is recorded and counting.";
+   else if(d.found&&d.status==="voided")r.innerHTML="This receipt was voided and reissued. If that's unexpected, contact your chapter.";
+   else if(d.found&&d.status&&d.status.indexOf("provisional")===0)r.innerHTML="Found — provisional ballot, pending membership verification.";
+   else r.innerHTML="No ballot found for that receipt. Check the code, or contact your chapter.";
+  }).catch(function(){r.textContent="Network error — please try again.";});}
+ b.addEventListener("click",check);i.addEventListener("keydown",function(e){if(e.key==="Enter")check();});
+})();
+(function(){var b=document.getElementById("vb"),out=document.getElementById("vbr");if(!b)return;
+ var GEN="0000000000000000000000000000000000000000000000000000000000000000";
+ function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(x){return x.toString(16).padStart(2,"0");}).join("");}
+ function sha(s){return crypto.subtle.digest("SHA-256",new TextEncoder().encode(s)).then(hex);}
+ function csv(line){var o=[],c="",q=false;for(var i=0;i<line.length;i++){var ch=line[i];
+  if(q){if(ch==='"'){if(line[i+1]==='"'){c+='"';i++;}else q=false;}else c+=ch;}
+  else{if(ch==='"')q=true;else if(ch===','){o.push(c);c="";}else c+=ch;}}o.push(c);return o;}
+ b.addEventListener("click",function(){out.textContent="Downloading the published ballots…";b.disabled=true;
+  Promise.all([fetch("/p/__POLL_ID__/verify/ballots.csv"),fetch("/p/__POLL_ID__/verify/chain_head.txt")])
+   .then(function(rs){if(rs[0].status===409){throw "notpub";}return Promise.all([rs[0].text(),rs[1].text()]);})
+   .then(function(t){var rows=t[0].trim().split("\\n"),head=t[1].trim();rows.shift();
+    var prev=GEN,i=0,total=rows.length;
+    function step(){
+     if(i>=total){out.innerHTML=(prev===head)
+       ?("\\u2713 Verified all "+total+" ballots. The recomputed fingerprint matches the published one \\u2014 nothing was added, removed, or altered.")
+       :("\\u2717 MISMATCH \\u2014 the recomputed fingerprint does not match. Do not trust this result; contact the election administrators.");
+      b.disabled=false;return;}
+     var f=csv(rows[i]);// receipt,answers,nonce,record_hash,prev_hash,chain_hash,...
+     sha(f[0]+"|"+f[1]+"|"+f[2]).then(function(rh){
+      if(rh!==f[3]||f[4]!==prev){out.innerHTML="\\u2717 Ballot "+(i+1)+" failed its hash check \\u2014 the record was altered.";b.disabled=false;return;}
+      return sha(prev+"|"+rh).then(function(link){
+       if(link!==f[5]){out.innerHTML="\\u2717 Chain broken at ballot "+(i+1)+".";b.disabled=false;return;}
+       prev=link;i++;if(i%200===0)out.textContent="Verifying \\u2026 "+i+"/"+total;setTimeout(step,0);});});}
+    step();})
+   .catch(function(e){out.textContent=(e==="notpub")
+     ?"The published files aren't available yet \\u2014 they appear once the election is finalized."
+     :"Couldn't download or verify the files. Try again later.";b.disabled=false;});});})();
+</script>
+</body></html>"""
+
+
+_GENESIS = "0" * 64
+
+
+def _build_verification(poll_id: str):
+    """Generate the public verification artifacts on demand from stored
+    ballots — identical algorithm to tools/build_chain.py, so the published
+    files and any independent recompute agree. Returns
+    (ballots_csv, used_codes_csv, chain_head)."""
+    ballots = []
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        if not d.get("record_hash"):
+            continue
+        ballots.append({
+            "receipt": d.get("receipt", ""),
+            "answers": d.get("answers_canon", ""),
+            "nonce": d.get("nonce", ""),
+            "record_hash": d["record_hash"],
+            "voided": bool(d.get("voided")),
+            "void_reason": d.get("void_reason", "") or "",
+        })
+    ballots.sort(key=lambda b: b["record_hash"])   # deterministic order
+    prev = _GENESIS
+    for b in ballots:
+        b["prev_hash"] = prev
+        b["chain_hash"] = hashlib.sha256(
+            f"{prev}|{b['record_hash']}".encode()).hexdigest()
+        prev = b["chain_hash"]
+    head = prev
+
+    def _c(s):   # minimal CSV-quote for the answers JSON field
+        s = str(s)
+        return '"' + s.replace('"', '""') + '"' if any(x in s for x in ',"\n') else s
+    lines = ["receipt,answers,nonce,record_hash,prev_hash,chain_hash,voided,void_reason"]
+    for b in ballots:
+        lines.append(",".join([b["receipt"], _c(b["answers"]), b["nonce"],
+                               b["record_hash"], b["prev_hash"], b["chain_hash"],
+                               str(b["voided"]).lower(), _c(b["void_reason"])]))
+    ballots_csv = "\n".join(lines) + "\n"
+
+    ulines = ["code_hash,used"]
+    for snap in db.collection(f"{poll_id}__codes").stream():
+        ulines.append(f"{snap.id},{str(bool((snap.to_dict() or {}).get('used'))).lower()}")
+    used_codes_csv = "\n".join(ulines) + "\n"
+    return ballots_csv, used_codes_csv, head + "\n"
+
+
+@app.get("/p/<poll_id>/verify/<fname>")
+def verify_file(poll_id, fname):
+    """PUBLIC verification files — served only after finalize + publish, so
+    anyone can recompute the whole result and the tamper-evidence chain:
+    ballots.csv (anonymous ballots + chain), used_codes.csv (turnout),
+    chain_head.txt (the fingerprint). Anonymous — no voter identity."""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return "Unknown poll.", 404
+    if not (cfg.get("finalized") and cfg.get("results_published")):
+        return "Verification files publish after the election is finalized.", 409
+    if fname not in ("ballots.csv", "used_codes.csv", "chain_head.txt"):
+        return "Not found.", 404
+    ballots_csv, used_csv, head = _build_verification(poll_id)
+    body = {"ballots.csv": ballots_csv, "used_codes.csv": used_csv,
+            "chain_head.txt": head}[fname]
+    mt = "text/plain" if fname.endswith(".txt") else "text/csv"
+    return Response(body, mimetype=mt,
+                    headers={"Content-Disposition": f"inline; filename={fname}",
+                             "Cache-Control": "public, max-age=300"})
+
+
+@app.get("/p/<poll_id>/verify-vote")
+def verify_vote_page(poll_id):
+    """Plain-language 'verify your vote' guide: the receipt check (now) and the
+    independent full-count verification (after close)."""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return "Unknown poll.", 404
+    html = (_VERIFY_PAGE.replace("__POLL_ID__", poll_id)
+            .replace("__POLL_NAME__", _esc(cfg.get("name") or poll_id))
+            .replace("__SOURCE_URL__", SOURCE_URL))
+    return Response(html, mimetype="text/html")
 
 
 @app.post("/p/<poll_id>/vote")
@@ -1073,7 +1590,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
-      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a>.</p>
+      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/methods" style="color:var(--dsa);font-weight:700">voting methods</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a> &middot; <a href="/vs-opavote" style="color:var(--dsa);font-weight:700">RosaVote &amp; OpaVote</a>.</p>
       <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
       <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
       no credentials needed.</p>
@@ -1137,7 +1654,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
         apportioned</b> (apportionment uses membership as of four months prior). Art. V
         &sect;5 also requires the delegate election be by <b>secret ballot</b> (enforced
         here by construction) and permits proportional representation within the Bylaws
-        &mdash; cite Scottish STV and the two-count alternates rule in the chapter's
+        &mdash; cite Scottish STV and the expanded-count alternates rule in the chapter's
         adopted election rules. <b>Practical implication:</b> because this ballot combines
         all three sections on one page, the whole ballot inherits the delegate window
         &mdash; set each chapter's <code>opens_at</code>/<code>closes_at</code> inside it,
@@ -1195,8 +1712,9 @@ SPLASH = """<!doctype html><html lang="en"><head>
         <p>Each ballot records the answers, a receipt code, a nonce, and a content hash.
         After close, a batch job builds a <b>tamper-evident hash chain</b> over all ballots
         and publishes ballots.csv, used-code counts, and the chain head. Ranked questions
-        are counted by <b>Scottish STV</b> (SSI 2007/42). Delegates use the <b>two-count
-        method</b>: an STV count for the delegate seats decides the delegation; the same
+        are counted by <b>Scottish STV</b> (SSI 2007/42). Delegates use the <b>expanded count</b>
+        for alternates (the default; an admin can switch a contest to the replacement re-run):
+        an STV count for the delegate seats decides the delegation; the same
         ballots are recounted with delegate+alternate seats, and anyone elected there who
         is not already a delegate becomes an alternate, in order of election. Candidate
         order is randomly shuffled per voter.</p>
@@ -1267,52 +1785,37 @@ SPLASH = """<!doctype html><html lang="en"><head>
       <details>
         <summary>How this compares to OpaVote</summary>
         <div class="dbody">
-        <p><b>Cost.</b> OpaVote prices per voter/ballot &mdash; quoted <b>~$9,600</b> for a
-        ~120k-voter election, and each chapter running on its own schedule means separate
-        elections, multiplying fees. This app's infrastructure is ~$10; total spend is
-        message delivery (<b>~$2&ndash;5k</b> with SMS + postcards), which OpaVote doesn't
-        cover anyway &mdash; it emails ballot links only, so SMS/postcard tiers and
-        reminder waves would be an extra system in either case.</p>
+        <p>OpaVote has been DSA's election platform for eight years &mdash; an affordable,
+        well-supported, fully hosted service that has run countless chapter and national
+        votes. It's an excellent choice, and this app isn't a replacement for it: it's a
+        <b>complementary, open-source, self-hosted option</b> for elections a chapter wants
+        to run on DSA's own infrastructure. Because both tools read and write the same
+        standard BLT ballot files, either can independently recount the other &mdash; there's
+        no lock-in either way. (See the fuller <a href="/vs-opavote">side-by-side</a>.)</p>
         <p><b>Tabulation.</b> Effectively identical rules: OpaVote's Scottish STV descends
         from OpenSTV, validated against eSTV &mdash; the same statute this app's shipped
-        tabulator implements. Both export/consume BLT, so either can recount the other.
-        OpaVote gives you a polished results page with per-round charts and a public
-        recount link for free; here you generate results packages per chapter with the
-        two-count delegate/alternates method built in. On OpaVote the alternates recount
-        is a <b>separately purchased count</b> &mdash; counts are priced on ballots cast,
-        so it raises cost (not necessarily double, since turnout is a fraction of the
-        electorate), and it's one more paid count per chapter, per rerun.</p>
-        <p><b>Security &amp; trust model.</b> OpaVote is a neutral, battle-tested third
-        party &mdash; strong optics, zero code to maintain, but closed operations, emailed
-        magic links as the only auth, and <b>data deleted ~12 weeks after start</b> unless
-        extended. This app is code-gated (hashed codes, enumeration-safe resend, atomic
-        one-code-one-vote), fully auditable source, data retained on staff&rsquo;s terms &mdash;
-        but staff own the security burden: IAM, audit logs, hardening, and a staff
-        administrator who is accountable. On visibility, OpaVote does offer anonymity
-        settings &mdash; elections can be configured non-anonymous so the election manager
-        sees how voters voted &mdash; but it's one setting for the whole election:
-        per-section rules like this ballot's (named poll votes and a secret delegate
-        ballot on the same page, with chapter-level access to their own members' votes)
-        aren't configurable there.</p>
-        <p><b>Operations &amp; troubleshooting.</b> On OpaVote, every count after close is
-        a paid count, so verification passes, alternate recounts, and "let's just check
-        that again" all meter &mdash; troubleshooting has a price tag per attempt. There's
-        also no mid-election intervention: you cannot make manual adjustments while voting
-        is open, and you cannot verify whether or how a specific member voted
-        mid-election. Here, an administrator can trace a specific ballot during voting
-        (via the audited code mapping) and rerun tallies unlimited times at no cost.</p>
-        <p><b>Bottom line.</b> OpaVote: pay ~2&ndash;4&times; more for a trusted-brand,
-        low-effort, email-only, secret-ballot-only election with expiring data and metered
-        recounts. This app is ~10&times; cheaper at scale and, more importantly, is
-        <b>built around our own membership</b>: codes are generated directly from the
-        deduplicated membership roll in the data warehouse &mdash; no list uploads, no
-        stale voter files &mdash; and the ballot itself is <b>fully customizable</b> in
-        ways no hosted product matches: three styled sections on one page, chapter-unique
-        questions and local issues, per-chapter delegate slates with randomized order and
-        the two-count alternates rule, pledge checkboxes, a free-form comment field, and
-        per-section visibility rules (named poll votes, secret delegate ballots). The
-        trade is operating and defending it ourselves &mdash; and unlimited free recounts
-        make that defense cheaper here than metered counts there.</p>
+        tabulator implements. OpaVote gives you a polished, hosted results page with
+        per-round charts and a public recount link; here you generate results packages per
+        chapter with the expanded-count delegate/alternates method built in.</p>
+        <p><b>Hosting &amp; data.</b> OpaVote is fully hosted and supported, with nothing to
+        run. This app is self-hosted on DSA's own cloud: ballots stay on DSA infrastructure
+        and are retained on staff's terms, in exchange for staff owning the operational and
+        security burden (IAM, audit logs, hardening, an accountable administrator).</p>
+        <p><b>Built for DSA's ballots.</b> Because it's ours to shape, this app bakes in a
+        few DSA-specific needs: codes generated straight from the deduplicated membership
+        roll (no list uploads), per-section visibility rules (named poll votes beside a
+        secret delegate ballot on one page), diversity-quota reservations, the
+        expanded-count alternates rule, chapter-unique questions, and SMS/postcard delivery
+        tiers alongside email. OpaVote handles these around the tool; here they're
+        configuration.</p>
+        <p><b>Cost.</b> Both are cost-conscious by design. OpaVote's nonprofit per-election
+        pricing is a big reason it fits DSA's dues-funded budget; this app runs on cloud DSA
+        already operates, so its main variable cost is message delivery (SMS/postcards),
+        which either approach would add separately.</p>
+        <p><b>Bottom line.</b> Two good options with different trade-offs: OpaVote for a
+        trusted, fully supported, zero-maintenance election; this app when a chapter wants
+        to self-host on DSA infrastructure, give members cryptographic ballot verification,
+        or use DSA-specific ballot features out of the box. Use whichever fits the race.</p>
         </div>
       </details>
 
@@ -1339,7 +1842,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
         polls and some ranked-choice voting, alongside its core strengths &mdash; motions,
         amendments, quorum tracking, and projector-ready floor process this app doesn't
         attempt. Where this app pulls ahead is <b>flexibility built for exactly this
-        election</b>: the Scottish STV <b>two-count alternates recount</b> as a built-in
+        election</b>: the Scottish STV <b>expanded-count alternates recount</b> as a built-in
         rule, code-gated voting with no accounts or logins to provision for 120k members,
         codes generated straight from the deduplicated membership roll, SMS and postcard
         delivery tiers with reminder waves, self-serve provisional ballots, per-section
@@ -1402,7 +1905,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>RosaVote</b> &middot; Prototype build &mdash; not a live election &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">RosaVote &amp; OpaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){
   var intro = document.getElementById("intro");
@@ -1430,7 +1933,8 @@ def index():
         f'href="/p/{pid}/v/{cfg["test_code"]}">Open {cfg["name"]} ballot with test code &rarr;</a>'
         for pid, cfg in polls.items() if cfg.get("test_code")
     )
-    html = SPLASH.replace("__TEST_ROWS__", rows).replace("__CHAPTER_LINKS__", links)
+    html = (SPLASH.replace("__TEST_ROWS__", rows).replace("__CHAPTER_LINKS__", links)
+            .replace("__SOURCE_URL__", SOURCE_URL))
     return Response(html, mimetype="text/html")
 
 
@@ -1518,7 +2022,7 @@ def _parse_when(body, key, tzinfo, errors):
 
 
 QKEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-QUESTION_TYPES = ("yesno", "ranked", "multi", "text")
+QUESTION_TYPES = ("yesno", "ranked", "multi", "text", "score")
 
 
 def _validate_constraints(cons_in, where, errors):
@@ -1541,6 +2045,10 @@ def _validate_constraints(cons_in, where, errors):
         nc = {"tag": tag, kind: bound}
         if label:
             nc["label"] = label
+        if con.get("local"):
+            # enforced WITHIN this contest (no later-contest relief) — e.g.
+            # "at least one of the two co-chairs is a non-cis man"
+            nc["local"] = True
         cons.append(nc)
     return cons
 
@@ -1588,7 +2096,7 @@ def _validate_questions(qs, errors, warnings):
         if "required" in q:
             nq["required"] = bool(q["required"])
 
-        if typ in ("ranked", "multi"):
+        if typ in ("ranked", "multi", "score"):
             opts, seen = [], set()
             for c in (q.get("options") or []):
                 cid = str((c.get("id") if isinstance(c, dict) else c[0]) or "").strip().upper()
@@ -1627,8 +2135,27 @@ def _validate_questions(qs, errors, warnings):
                 return max(v, minimum)
             nq["seats"] = _n("seats", 1, 1)
             nq["alternates"] = _n("alternates", 0, 0)
+            if nq["alternates"]:
+                am = str(q.get("alternate_method") or "expanded").strip().lower()
+                if am not in ("expanded", "replacement"):
+                    errors.append(f"question {key!r}: alternate_method must be "
+                                  "expanded or replacement")
+                    am = "expanded"
+                nq["alternate_method"] = am
             if q.get("require_full"):
                 nq["require_full"] = True
+            ew = q.get("eliminate_winners_of")
+            if ew:
+                if not isinstance(ew, list) or not all(isinstance(k, str) for k in ew):
+                    errors.append(f"question {key!r}: eliminate_winners_of must be a "
+                                  "list of earlier question keys")
+                else:
+                    earlier = {x.get("key") for x in qs[:i]}
+                    bad = [k for k in ew if k not in earlier]
+                    if bad:
+                        errors.append(f"question {key!r}: eliminate_winners_of "
+                                      f"references non-earlier question(s): {', '.join(bad)}")
+                    nq["eliminate_winners_of"] = [k for k in ew if k in earlier]
             method = str(q.get("method") or "scottish").strip().lower()
             if method not in ("scottish", "meek"):
                 errors.append(f"question {key!r}: method must be scottish or meek")
@@ -1672,6 +2199,58 @@ def _validate_questions(qs, errors, warnings):
                 warnings.append(f"question {key!r} uncontested: {len(nq['options'])} "
                                 f"option(s) for {nq['seats']} seat(s) + "
                                 f"{nq['alternates']} alternate(s)")
+        elif typ == "score":
+            # Score / STAR voting: voters rate every candidate 0..max_score.
+            try:
+                seats = int(q.get("seats", 1))
+            except (TypeError, ValueError):
+                seats = 0
+            if seats < 1:
+                errors.append(f"question {key!r}: seats must be an integer ≥ 1")
+                seats = 1
+            nq["seats"] = seats
+            try:
+                max_s = int(q.get("max_score", 2))
+            except (TypeError, ValueError):
+                max_s = 0
+            if not 1 <= max_s <= 10:
+                errors.append(f"question {key!r}: max_score must be between 1 and 10")
+                max_s = 2
+            nq["max_score"] = max_s
+            method = str(q.get("method") or "score").strip().lower()
+            if method not in ("score", "star", "star_pr"):
+                errors.append(f"question {key!r}: method must be score, star, or star_pr")
+                method = "score"
+            nq["method"] = method   # star = STAR (Bloc if multi); star_pr = proportional
+            # by default every candidate must be scored (spec requirement); a
+            # chapter may relax this so unrated candidates simply score 0
+            nq["require_full"] = bool(q.get("require_full", True))
+            cons_in = q.get("constraints") or []
+            if q.get("quota_group"):
+                nq["quota_group"] = str(q["quota_group"]).strip().lower()
+            if cons_in:
+                cons = _validate_constraints(cons_in, f"question {key!r}", errors)
+                mins = sum(c["min"] for c in cons if "min" in c)
+                if mins > seats:
+                    errors.append(f"question {key!r}: constraint minimums ({mins}) "
+                                  f"exceed the {seats} seats")
+                if cons:
+                    nq["constraints"] = cons
+            if cons_in or nq.get("quota_group"):
+                missing = [o["id"] for o in nq["options"] if "tags" not in o]
+                if missing:
+                    errors.append(f"question {key!r}: quota requirements need "
+                                  "collected attributes — add a tags list (may "
+                                  f"be []) for: {', '.join(missing)}")
+            if method == "star" and seats > 1:
+                warnings.append(f"question {key!r}: multi-seat STAR is sequential "
+                                "(majoritarian), not proportional — use ranked STV "
+                                "or Meek for a proportional multi-winner contest")
+            nq["secret"] = bool(q.get("secret"))
+            nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
+            if nq["options"] and len(nq["options"]) <= seats:
+                warnings.append(f"question {key!r} uncontested: {len(nq['options'])} "
+                                f"option(s) for {seats} seat(s)")
         elif typ == "text":
             try:
                 mx = int(q.get("max", TEXT_MAX_DEFAULT))
@@ -1839,6 +2418,8 @@ def validate_poll_config(poll_id: str, body: dict):
     }
     if qgroups:
         cfg["quota_groups"] = qgroups
+    if body.get("demo"):
+        cfg["demo"] = True   # demo/test poll: stays votable even when finalized
     if questions is not None:
         cfg["questions"] = questions
     else:
@@ -1923,14 +2504,59 @@ def admin_whoami():
 
 @app.get("/admin/api/polls")
 def admin_list_polls():
+    """List polls for the console. Unlike the voting/public paths (which use
+    load_polls and never see archived polls), this INCLUDES archived polls
+    with an `archived: true` flag so an admin can review and unarchive them."""
     ident = require_admin()
     if not ident:
         return jsonify({"error": "forbidden"}), 403
-    polls = load_polls(force=True)
+    out = {}
+    try:
+        for snap in db.collection(CONFIG_COLL).stream():
+            d = snap.to_dict() or {}
+            cfg = _normalize_cfg(d)
+            out[snap.id] = dict(cfg_to_doc(cfg), state=window_state(cfg),
+                                archived=bool(d.get("archived")))
+    except Exception:
+        out = {}
+    if not out:   # unseeded — fall back to the built-in demo chapters
+        out = {pid: dict(cfg_to_doc(cfg), state=window_state(cfg), archived=False)
+               for pid, cfg in CHAPTERS.items()}
     if ident["role"] != "national":
-        polls = {pid: cfg for pid, cfg in polls.items() if pid in ident["polls"]}
-    return jsonify({pid: dict(cfg_to_doc(cfg), state=window_state(cfg))
-                    for pid, cfg in polls.items()}), 200
+        out = {pid: cfg for pid, cfg in out.items() if pid in ident["polls"]}
+    return jsonify(out), 200
+
+
+@app.post("/admin/api/polls/<poll_id>/archive")
+def admin_archive_poll(poll_id):
+    """Archive (national only): hide a poll from the voting and public paths
+    and from the normal console list. Ballots and results are NOT deleted —
+    archiving is reversible with /unarchive. A poll can be archived whether
+    open or closed; archiving a still-open poll also stops it accepting votes
+    (it leaves the active set)."""
+    return _set_archived(poll_id, True)
+
+
+@app.post("/admin/api/polls/<poll_id>/unarchive")
+def admin_unarchive_poll(poll_id):
+    """Restore an archived poll to the active set (national only)."""
+    return _set_archived(poll_id, False)
+
+
+def _set_archived(poll_id: str, archived: bool):
+    ident = require_admin(national_only=True)
+    if not ident:
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        snap = db.collection(CONFIG_COLL).document(poll_id).get()
+    except Exception:
+        snap = None
+    if not snap or not getattr(snap, "exists", False):
+        return jsonify({"error": "unknown_poll"}), 404
+    db.collection(CONFIG_COLL).document(poll_id).update({"archived": archived})
+    _audit(poll_id, "archive" if archived else "unarchive", ident["name"])
+    load_polls(force=True)
+    return jsonify({"ok": True, "archived": archived}), 200
 
 
 @app.post("/admin/api/polls/<poll_id>")
@@ -1959,6 +2585,12 @@ def admin_save_poll(poll_id):
         return jsonify({"error": "invalid_config", "errors": errors,
                         "warnings": warnings}), 400
     db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
+    # a config change invalidates any frozen public results; re-freeze from the
+    # new config if still published, else drop the stale frozen doc entirely.
+    if cfg.get("finalized") and cfg.get("results_published"):
+        _store_published_results(poll_id, cfg)
+    else:
+        _clear_published(poll_id)
     if existing and existing.get("finalized") and unfinalize:
         _audit(poll_id, "unfinalize_reopen", ident["name"])
     _audit(poll_id, "config_save", ident["name"])
@@ -2077,6 +2709,27 @@ def _blt_text(rows, key, options, seats, title="contest", withdrawn=()):
     return "\n".join(lines) + "\n"
 
 
+def _scores_text(rows, key, options, seats, max_score, title="contest"):
+    """In-memory score-ballot file (parseable by stv_tabulate.parse_scores).
+    Each ballot lists ``candidate:score`` pairs; an ABSTAIN answer is an
+    empty ballot. Same weighted envelope as _blt_text so score contests
+    export and cross-check the same way."""
+    idx = {o["id"]: i + 1 for i, o in enumerate(options)}
+    lines = [f"{len(options)} {seats} {int(max_score)}"]
+    for a, w in rows:
+        v = a.get(key)
+        if not isinstance(v, dict) or not v:      # ABSTAIN / missing => empty
+            lines.append(f"{w} 0")
+            continue
+        toks = [f"{idx[c]}:{int(s)}" for c, s in v.items() if c in idx]
+        lines.append(f"{w} " + " ".join(toks) + " 0" if toks else f"{w} 0")
+    lines.append("0")
+    for o in options:
+        lines.append('"' + o["name"].replace('"', "'") + '"')
+    lines.append('"' + title.replace('"', "'") + '"')
+    return "\n".join(lines) + "\n"
+
+
 def _code_weights(poll_id: str) -> dict:
     """code_hash -> voter weight (default 1). Weights live on the CODE docs
     so they can be provisioned at import and edited before/during/after the
@@ -2121,11 +2774,26 @@ def _tally_rows(poll_id: str):
     return main_rows, comments_rows, secret_rows
 
 
+def _is_blank_answer(v, typ) -> bool:
+    """An answer that carries no real selection — empty or all-abstain. An
+    all-blank ballot is the signature of a client glitch or a bot that opened
+    and submitted a ballot without a human choosing anything."""
+    if v is None:
+        return True
+    if typ == "yesno":
+        return str(v).upper() in ("", "ABSTAIN")
+    if typ == "score":
+        return v == "ABSTAIN" or (isinstance(v, dict) and not v)
+    if isinstance(v, list):        # ranked / multi
+        return not v or v == ["ABSTAIN"]
+    return not v
+
+
 def compute_results(poll_id: str, cfg: dict) -> dict:
     """WEIGHTED tallies per question (each ballot counts at its voter's
     current weight; default 1). Ranked contests use the shipped Scottish STV
     tabulator; delegate-style contests also run the alternates recount
-    (two-count method). Text answers are counted, never displayed."""
+    (expanded count by default). Text answers are counted, never displayed."""
     import stv_tabulate
     main_rows, comments_rows, secret_rows = _tally_rows(poll_id)
     weighted = any(w != 1 for _, w in main_rows) or any(w != 1 for _, w in secret_rows)
@@ -2139,6 +2807,9 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
         entry = {"key": key, "type": typ, "title": q["title"],
                  "secret": bool(q.get("secret"))}
         rows = secret_rows if q.get("secret") else main_rows
+        if typ != "text":
+            entry["blank"] = sum(w for a, w in rows
+                                 if _is_blank_answer(a.get(key), typ))
         if typ == "yesno":
             counts = {"YES": 0, "NO": 0, "ABSTAIN": 0}
             for a, w in main_rows:
@@ -2153,11 +2824,28 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
         elif typ == "ranked":
             options = q["options"]
             seats = int(q.get("seats", 1))
+            # cross-contest elimination: withdraw the winners of the named
+            # earlier contests (e.g. officers who won a seat are removed from
+            # the at-large race — Metro DC rule). Match people by option id.
+            elim = set()
+            for rk in (q.get("eliminate_winners_of") or []):
+                ref_entry = next((e for e in out if e["key"] == rk), None)
+                ref_q = next((m for m in all_questions if m["key"] == rk), None)
+                if ref_entry and ref_q:
+                    n2i = {o["name"]: o["id"] for o in ref_q.get("options", [])}
+                    for w in ref_entry.get("winners", []):
+                        if n2i.get(w):
+                            elim.add(n2i[w])
+            wd = tuple(i for i in elim if i in {o["id"] for o in options})
+            if wd:
+                id2name = {o["id"]: o["name"] for o in options}
+                entry["eliminated"] = [id2name[i] for i in wd]
             cons = q.get("constraints") or None
             group = q.get("quota_group")
             gpre, glater_seats, glater_supply = None, 0, None
             if group and group in qgroups:
-                cons = qgroups[group]
+                cons = list(qgroups[group]) + [dict(c, local=True)
+                        for c in (q.get("constraints") or [])]
                 gpre = dict(group_elected[group])
                 seen_self, supply = False, {}
                 for m in all_questions:
@@ -2179,7 +2867,7 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
                      if o.get("tags")} or None
             counter = stv_tabulate.count_meek if q.get("method") == "meek" \
                 else stv_tabulate.count
-            res = counter(_blt_text(rows, key, options, seats),
+            res = counter(_blt_text(rows, key, options, seats, withdrawn=wd),
                           constraints=cons, cand_tags=ctags,
                           pre_elected=gpre, later_seats=glater_seats,
                           later_supply=glater_supply)
@@ -2192,22 +2880,92 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
                 entry["constraints"] = res["constraints"]
             alts = int(q.get("alternates", 0))
             if alts:
-                recount = counter(_blt_text(rows, key, options, seats + alts),
-                                  constraints=cons, cand_tags=ctags,
-                                  pre_elected=gpre, later_seats=glater_seats,
-                                  later_supply=glater_supply)
-                entry["alternates"] = [w for w in recount["winners"]
-                                       if w not in res["winners"]]
+                alt_method = q.get("alternate_method") or "expanded"
+                entry["alternate_method"] = alt_method
+                if alt_method == "replacement":
+                    # remove ALL elected, re-run for the alternate seats — the
+                    # alternates that would win if no delegate had run.
+                    name2id = {o["name"]: o["id"] for o in options}
+                    won = tuple(name2id[w] for w in res["winners"] if w in name2id)
+                    recount = counter(_blt_text(rows, key, options, alts,
+                                                withdrawn=tuple(wd) + won),
+                                      constraints=cons, cand_tags=ctags,
+                                      pre_elected=gpre, later_seats=glater_seats,
+                                      later_supply=glater_supply)
+                    entry["alternates"] = list(recount["winners"])
+                else:
+                    # expanded count: recount for delegate+alternate seats; the
+                    # additional winners become alternates, in order.
+                    recount = counter(_blt_text(rows, key, options, seats + alts, withdrawn=wd),
+                                      constraints=cons, cand_tags=ctags,
+                                      pre_elected=gpre, later_seats=glater_seats,
+                                      later_supply=glater_supply)
+                    entry["alternates"] = [w for w in recount["winners"]
+                                           if w not in res["winners"]]
             if cons:
                 # the admin-facing comparison: same ballots, quotas off
-                res_u = counter(_blt_text(rows, key, options, seats))
+                res_u = counter(_blt_text(rows, key, options, seats, withdrawn=wd))
                 entry["unconstrained"] = {"winners": res_u["winners"],
                                           "quota": res_u["quota"],
                                           "stages": res_u["stages"]}
                 if alts:
-                    ru = counter(_blt_text(rows, key, options, seats + alts))
+                    ru = counter(_blt_text(rows, key, options, seats + alts, withdrawn=wd))
                     entry["unconstrained"]["alternates"] = [
                         w for w in ru["winners"] if w not in res_u["winners"]]
+            if group and group in qgroups:
+                name_tags = {o["name"]: (o.get("tags") or []) for o in options}
+                for w in res["winners"]:
+                    for t in name_tags.get(w, []):
+                        group_elected[group][t] = group_elected[group].get(t, 0) + 1
+        elif typ == "score":
+            options = q["options"]
+            seats = int(q.get("seats", 1))
+            max_s = int(q.get("max_score", 2))
+            cons = q.get("constraints") or None
+            group = q.get("quota_group")
+            gpre, glater_seats, glater_supply = None, 0, None
+            if group and group in qgroups:
+                cons = list(qgroups[group]) + [dict(c, local=True)
+                        for c in (q.get("constraints") or [])]
+                gpre = dict(group_elected[group])
+                seen_self, supply = False, {}
+                for m in all_questions:
+                    if m.get("quota_group") != group or m["type"] not in ("ranked", "score"):
+                        continue
+                    if m["key"] == key:
+                        seen_self = True
+                        continue
+                    if not seen_self:
+                        continue
+                    glater_seats += int(m.get("seats", 1))
+                    for o in m["options"]:
+                        for t in (o.get("tags") or []):
+                            supply[t] = supply.get(t, 0) + 1
+                glater_supply = supply or None
+                entry["quota_group"] = group
+                entry["group_partial"] = glater_seats > 0
+            ctags = {i + 1: o["tags"] for i, o in enumerate(options)
+                     if o.get("tags")} or None
+            counter = {"star": stv_tabulate.count_star,
+                       "star_pr": stv_tabulate.count_star_pr}.get(
+                           q.get("method"), stv_tabulate.count_score)
+            res = counter(_scores_text(rows, key, options, seats, max_s),
+                          constraints=cons, cand_tags=ctags,
+                          pre_elected=gpre, later_seats=glater_seats,
+                          later_supply=glater_supply)
+            entry["method_used"] = res["method"]
+            entry.update(seats=seats, max_score=max_s,
+                         valid_ballots=res["valid_ballots"],
+                         winners=res["winners"],
+                         scores=res.get("scores", {}),
+                         top_scores=res.get("top_scores", {}),
+                         stages=res["stages"])
+            if res.get("constraints"):
+                entry["constraints"] = res["constraints"]
+            if cons:
+                res_u = counter(_scores_text(rows, key, options, seats, max_s))
+                entry["unconstrained"] = {"winners": res_u["winners"],
+                                          "scores": res_u.get("scores", {})}
             if group and group in qgroups:
                 name_tags = {o["name"]: (o.get("tags") or []) for o in options}
                 for w in res["winners"]:
@@ -2224,12 +2982,23 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
             entry["responses"] = sum(1 for cm in comments_rows if (cm or {}).get(key))
             entry["note"] = "free-text answers stay sealed (admin export only)"
         out.append(entry)
+    # poll-level: ballots that are blank on EVERY question they carry — the
+    # systemic-glitch / empty-ballot signal (per-collection so secrecy holds).
+    main_q = [q for q in all_questions if not q.get("secret") and q["type"] != "text"]
+    secret_q = [q for q in all_questions if q.get("secret")]
+    fully_blank = 0
+    if main_q:
+        fully_blank += sum(1 for a, _ in main_rows
+                           if all(_is_blank_answer(a.get(q["key"]), q["type"]) for q in main_q))
+    if secret_q:
+        fully_blank += sum(1 for d, _ in secret_rows
+                           if all(_is_blank_answer(d.get(q["key"]), q["type"]) for q in secret_q))
     return {"poll_id": poll_id, "name": cfg.get("name"),
             "finalized_at": cfg.get("finalized_at"),
             "final_counts": cfg.get("final_counts"),
             # secret-ballot-only polls keep their ballots in the secret collection
             "ballots_counted": max(len(main_rows), len(secret_rows)), "weighted": weighted,
-            "questions": out}
+            "blank_ballots": fully_blank, "questions": out}
 
 
 @app.get("/admin/api/polls/<poll_id>/results")
@@ -2323,20 +3092,49 @@ def admin_recount_preview(poll_id):
         _audit(poll_id, "live_recount_preview", ident["name"])
     import stv_tabulate
     method = str(data.get("method") or "").strip().lower()
-    if method not in stv_tabulate.ALT_METHODS:
-        return jsonify({"error": "bad_method",
-                        "message": f"method must be one of {stv_tabulate.ALT_METHODS}"}), 400
     qkey = str(data.get("question") or "").strip()
     q = next((x for x in poll_questions(cfg)
-              if x["key"] == qkey and x["type"] == "ranked"), None)
+              if x["key"] == qkey and x["type"] in ("ranked", "score")), None)
     if not q:
-        return jsonify({"error": "not_a_ranked_question"}), 404
+        return jsonify({"error": "not_a_ranked_or_score_question"}), 404
     main_rows, _, secret_rows = _tally_rows(poll_id)
     rows = secret_rows if q.get("secret") else main_rows
+    # SCORE contest: preview the other of score/star, or a plain-score view.
+    if q["type"] == "score":
+        if method not in stv_tabulate.SCORE_METHODS:
+            return jsonify({"error": "bad_method",
+                            "message": f"method must be one of {stv_tabulate.SCORE_METHODS}"}), 400
+        max_s = int(q.get("max_score", 2))
+        ctags = {i + 1: o["tags"] for i, o in enumerate(q["options"])
+                 if o.get("tags")} or None
+        stext = _scores_text(rows, qkey, q["options"], int(q.get("seats", 1)),
+                             max_s, title=q["title"])
+        counter = {"star": stv_tabulate.count_star,
+                   "star_pr": stv_tabulate.count_star_pr}.get(method, stv_tabulate.count_score)
+        r = counter(stext, cand_tags=ctags)
+        note = {
+            "star": "STAR (score then automatic runoff): the two highest-scoring "
+                    "candidates meet in a head-to-head runoff decided by how many voters "
+                    "scored each higher (multi-seat = Bloc STAR, majoritarian).",
+            "star_pr": "STAR-PR (Allocated Score): proportional multi-winner STAR — a "
+                       "cohesive minority earns its share of seats via Hare-quota ballot "
+                       "spending.",
+        }.get(method, "Score voting: candidates' 0–%d ratings are summed and the highest "
+              "totals win." % max_s) + (" Preview only — the official method is set "
+                                        "on the question.")
+        return jsonify({"title": q["title"], "method": method, "note": note,
+                        "seats": r["seats"], "winners": r["winners"],
+                        "scores": r.get("scores", {}),
+                        "official_method": q.get("method", "score")}), 200
+    _allowed = stv_tabulate.ALT_METHODS + stv_tabulate.ADVANCED_ALT_METHODS
+    if method not in _allowed:
+        return jsonify({"error": "bad_method",
+                        "message": f"method must be one of {_allowed}"}), 400
     blt = _blt_text(rows, qkey, q["options"], int(q.get("seats", 1)),
                     title=q["title"])
     res = stv_tabulate.count_alternative(blt, method)
     res["official_method"] = "Scottish STV"
+    res["advanced"] = method in stv_tabulate.ADVANCED_ALT_METHODS
     return jsonify(res), 200
 
 
@@ -2354,6 +3152,18 @@ def _store_published_results(poll_id: str, cfg: dict) -> dict:
         "json": json.dumps(res), "generated_at": int(time.time())})
     _pub_cache[poll_id] = (time.time(), res)
     return res
+
+
+def _clear_published(poll_id: str):
+    """Drop any FROZEN published results + in-process cache for a poll, so the
+    next view/publish recomputes from the CURRENT config. Called whenever a
+    poll's config changes — otherwise a page published early (e.g. before its
+    real questions were loaded) would keep serving stale/demo content."""
+    _pub_cache.pop(poll_id, None)
+    try:
+        db.collection(f"{poll_id}__published").document("results").delete()
+    except Exception:
+        pass
 
 
 def _read_published_results(poll_id: str):
@@ -2469,7 +3279,10 @@ def _results_txt(res: dict) -> str:
                 out.append(f"      {'(non-transferable)':<40} {st['nontransferable']:>12g}")
             out.append(f"  WINNERS: {', '.join(q['winners'])}")
             if q.get("alternates"):
-                out.append(f"  ALTERNATES (two-count recount): {', '.join(q['alternates'])}")
+                _amlabel = ("replacement re-run"
+                            if q.get("alternate_method") == "replacement"
+                            else "expanded count")
+                out.append(f"  ALTERNATES ({_amlabel}): {', '.join(q['alternates'])}")
             if q.get("quota_group"):
                 out.append(f"  QUOTA GROUP: {q['quota_group']} (requirements span "
                            "every contest in the group; tallies are body-wide)")
@@ -3088,12 +3901,14 @@ _LEGAL_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 main{{max-width:640px;margin:0 auto;padding:24px 18px 60px}}
 h1{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase}}h2{{font-size:1.05rem}}
 .banner{{background:#dd1111;color:#fff5e5;padding:12px 18px;font-family:"Arial Narrow",sans-serif;
-font-weight:bold;text-transform:uppercase}} .draft{{background:#ffe1b2;border:1px solid #000;
-padding:8px 12px;font-size:.85rem}} a{{color:#dd1111}}</style></head><body>
+font-weight:bold;text-transform:uppercase}} a{{color:#dd1111}}</style></head><body>
 <div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>RosaVote</div><main><h1>{title}</h1>
-<p class="draft">DRAFT — prototype language pending review by DSA staff and counsel.
-This service is a prototype and not a live election unless explicitly announced.</p>
-{body}<p><a href="/">&larr; Back to RosaVote</a></p></main></body></html>"""
+{body}<p><a href="/">&larr; Back to RosaVote</a></p>
+<p style="font-size:.8rem;color:#666;margin-top:24px">RosaVote is free/libre software under
+<a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a> &middot;
+<a href="__SOURCE_URL__">source code</a> &middot; &copy; 2026 Walker Green</p></main></body></html>"""
+# bake the AGPL §13 source-offer URL in once (leaves {title}/{body} for .format)
+_LEGAL_SHELL = _LEGAL_SHELL.replace("__SOURCE_URL__", SOURCE_URL)
 
 TERMS_BODY = """
 <h2>What this service is</h2>
@@ -3187,6 +4002,10 @@ def logo():
 API_GROUPS = [
     ("Public — voter", [
         ("GET", "/p/&lt;poll&gt;/", "None", "The branded ballot page for a poll."),
+        ("POST", "/p/&lt;poll&gt;/resend", "None", "Self-serve 'lost my code'. Body {contact}. Enumeration-safe (always {status:ok}), rate-limited 15 min/contact; re-sends the member's link to their on-record contacts only."),
+        ("GET", "/prefs", "None", "Self-serve notification preferences page (opt a contact out / back in)."),
+        ("POST", "/prefs/optout", "None", "Suppress election contact to an email/phone. Body {contact}. Enumeration-safe."),
+        ("POST", "/prefs/optin", "None", "Re-enable election contact to an email/phone. Body {contact}."),
         ("GET", "/p/&lt;poll&gt;/v/&lt;code&gt;", "None", "Ballot page with a one-tap voting code embedded."),
         ("GET", "/p/&lt;poll&gt;/voted?code=…", "None", "Has this code already voted? → {voted: bool}. Malformed/unknown codes are rejected before any DB read."),
         ("POST", "/p/&lt;poll&gt;/vote", "Voting code (in body)", "Cast a ballot: {code, answers:{questionKey:value}}. One code = one vote, enforced atomically. → {status:'recorded', receipt}."),
@@ -3203,12 +4022,14 @@ API_GROUPS = [
         ("POST", "/admin/api/polls/&lt;poll&gt;", "National", "Create or update a poll config (the whole ballot schema). unfinalize:true to reopen a certified poll (audited)."),
         ("POST", "/admin/api/polls/&lt;poll&gt;/open", "Poll admin", "Open voting now (with or without a schedule)."),
         ("POST", "/admin/api/polls/&lt;poll&gt;/close", "Poll admin", "Close voting now."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/archive", "National", "Archive a poll: hide it from voting/public and the normal list (ballots kept, reversible)."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/unarchive", "National", "Restore an archived poll to the active set."),
         ("POST", "/admin/api/polls/&lt;poll&gt;/publish", "Poll admin", "Publish/unpublish the public results page (finalized polls). Body: {publish:bool}."),
         ("POST", "/admin/api/cron/closeout", "National", "Finalize every poll past its window. Called by Cloud Scheduler every 15 min; idempotent."),
     ]),
     ("Admin — results &amp; tabulation", [
         ("GET", "/admin/api/polls/&lt;poll&gt;/results", "Poll admin", "Full tallies (finalized, or national + ?live=1, audited). ?fresh=1 recomputes past the cache."),
-        ("POST", "/admin/api/polls/&lt;poll&gt;/recount_preview", "Poll admin", "Preview a ranked contest under another method. Body: {question, method: plurality|approval|borda|irv|meek}."),
+        ("POST", "/admin/api/polls/&lt;poll&gt;/recount_preview", "Poll admin", "Preview a ranked contest under another method (plurality|approval|borda|irv|mntv|meek), or a score contest as score|star|star_pr. Body: {question, method}."),
         ("GET", "/admin/api/polls/&lt;poll&gt;/blt/&lt;qkey&gt;", "Poll admin", "Download a contest as a standard .blt. ?recount=1 alternates; ?withdraw=IDS dropout recount."),
         ("GET", "/admin/api/polls/&lt;poll&gt;/export.zip", "Poll admin", "Results package: .txt/.csv/.json reports, printable .html, every .blt, ballots.csv, verify readme. ?anonymize=1."),
         ("POST", "/admin/api/count_blt", "Any admin", "Run Scottish/Meek STV on a posted .blt (with optional constraints). Touches no stored data."),
@@ -3283,11 +4104,14 @@ def api_docs():
 ACCURACY = {
     "opavote_anchor": {"election": "NPC At-Large 2025", "candidates": 37,
                        "seats": 23, "ballots": 1279, "match": "23 / 23 winners"},
-    "regression": {"elections": 29, "ballots": 1623, "weighted_ballots": 1638,
-                   "errors": 0, "deterministic": True, "seats_filled": True},
+    "regression": {"elections": 40, "ballots": 6429, "weighted_ballots": 51274,
+                   "errors": 0, "deterministic": True, "seats_filled": True,
+                   "score_fixtures": 2},
     "replay": {"election": "NLC Steering (19 candidates, 13 seats)", "ballots": 810,
                "cast": "810 / 810", "throughput": "48–91 votes/sec (single client, "
                "48 at 40 devices, 91 at 3,220 ballots / 100 devices)", "match": True},
+    "stress": {"ballots": 3220, "devices": 100, "cast": "3,220 / 3,220",
+               "failures": 0, "peak": "91 votes/sec", "match": True},
 }
 
 
@@ -3296,8 +4120,9 @@ def _accuracy_html():
     body = f"""
 <p style="font-size:.95rem"><b>How accurate is RosaVote at tabulating an election?</b>
 The counting engine is the shipped <code>stv_tabulate.py</code> (Scottish STV
-per SSI 2007/42; Meek STV per the New Zealand rules). Accuracy here means three
-separate things, each tested independently and each reproducible by you.</p>
+per SSI 2007/42; Meek STV per the New Zealand rules; plus Score and STAR voting
+for rated ballots). Accuracy here means several separate things, each tested
+independently and each reproducible by you.</p>
 
 <h2>1 · Exact match against OpaVote</h2>
 <p>The strongest check: on the real <b>{a['opavote_anchor']['election']}</b>
@@ -3323,6 +4148,10 @@ overvotes, empty/abstain ballots, ballot weights above one, and races from 2 to
 set on repeated runs (no hidden randomness in tabulation; candidate <i>display</i>
 order is shuffled per voter, but that never touches the count).</li>
 <li><b>Every seat filled</b> correctly for every contest.</li>
+<li><b>Score and STAR voting</b> are covered too: {a['regression']['score_fixtures']}
+score-ballot fixtures count deterministically under both Score (sum of 0–max
+ratings) and STAR (score-then-automatic-runoff), including the DSA at-large
+0/1/2 delegate method with its gender/racial-minority quota reservations.</li>
 </ul>
 <p>Scottish and Meek STV agree on most contests and legitimately differ on a few
 close ones — that's the two methods being genuinely different rules, not an
@@ -3342,6 +4171,22 @@ Throughput measured {a['replay']['throughput']} — client-bound, since a real
 electorate is spread across thousands of devices and days rather than one test
 machine. Run it: <code>python3 tools/replay_election.py &lt;file.blt&gt; --base
 &lt;host&gt; --token …</code>.</p>
+
+<h2>4 · Load / stress test</h2>
+<p>Alongside accuracy, RosaVote is stress-tested for scale. In the largest run,
+<b>{a['stress']['ballots']:,} ballots were cast at {a['stress']['devices']}
+concurrent simulated devices</b> against the live service:
+<b>{a['stress']['cast']} recorded, {a['stress']['failures']} failures</b>, and the
+stored ballots still tabulated to the correct result. Throughput scaled linearly
+with concurrency to a peak of <b>{a['stress']['peak']}</b> and stayed
+client-bound — the single test laptop over the public internet was the
+bottleneck, not the server. For context, 120,000 members voting over several days
+averages well under 2 votes/sec, and even a last-hour surge is a small fraction of
+what one test machine already drove without a single dropped or double-counted
+ballot. The service also caps instances and serves published results from a frozen
+cache, so a spike in <i>viewers</i> can never slow <i>voting</i>. This stress run
+surfaced and fixed one real concurrency bug (a stale per-instance config cache on a
+freshly created poll), now closed.</p>
 
 <h2>What this does and doesn't prove</h2>
 <p><b>Proven:</b> the tabulator reproduces OpaVote's result on a real
@@ -3364,6 +4209,281 @@ themselves — which is a stronger guarantee than any closed certificate.</p>
 @app.get("/accuracy")
 def accuracy_page():
     return Response(_accuracy_html(), mimetype="text/html")
+
+
+# ---- voting-methods explainer -------------------------------------------
+# Every method RosaVote can run, in plain English, with honest trade-offs.
+# "official" = can be a contest's binding count; "preview" = comparison only.
+METHODS = [
+    {"name": "Yes / No (with Abstain)", "kind": "Single question", "role": "official",
+     "how": "Each voter picks Yes, No, or Abstain. The side with more votes wins; "
+            "abstentions are reported but excluded from the Yes-vs-No margin.",
+     "pros": ["Unambiguous for a single motion, endorsement, or bylaws change.",
+              "Abstain is recorded separately, so quorum/participation is visible."],
+     "cons": ["Only answers one binary question — not for electing people or ranking options."],
+     "use": "Referendums, endorsements, single ballot measures."},
+    {"name": "Multi-select", "kind": "Choose-many", "role": "official",
+     "how": "Voters check every option they support (or Abstain). Each check is counted; "
+            "the tally shows support for each option.",
+     "pros": ["Simple for 'check all that apply' — pledges, interest sign-ups, non-exclusive lists.",
+              "No vote-splitting between similar options."],
+     "cons": ["As an election method it's majoritarian (see MNTV below) — a coordinated "
+              "majority can carry every option; RosaVote uses it for tallies, not seat allocation."],
+     "use": "Pledge lists, committee interest, any non-exclusive checklist."},
+    {"name": "Ranked choice — Scottish STV", "kind": "Proportional (multi-winner)", "role": "official",
+     "how": "Voters rank candidates 1, 2, 3… A candidate needs a quota (Droop) to win. "
+            "Surplus votes above the quota, and votes for eliminated candidates, transfer "
+            "to each ballot's next choice — by fixed fractions (SSI 2007/42).",
+     "pros": ["Proportional: a like-minded bloc wins seats in proportion to its support.",
+              "Little vote-splitting or wasted votes; widely used and legally defined.",
+              "Exactly the method behind DSA's NPC At-Large count (matches OpaVote)."],
+     "cons": ["More complex to explain than a plain X-vote.",
+              "Fractional transfers mean a hand recount is tedious (but fully reproducible)."],
+     "use": "Delegate slates, at-large committees, any multi-seat body meant to mirror the electorate."},
+    {"name": "Ranked choice — Meek STV", "kind": "Proportional (multi-winner)", "role": "official",
+     "how": "Same ranked ballots as Scottish STV, but surpluses transfer continuously via "
+            "iterative 'keep factors' and the quota shrinks as ballots exhaust (New Zealand rules).",
+     "pros": ["The most precise STV — treats later preferences more fairly than fixed-fraction transfer.",
+              "Required by YDSA for its NCC and delegate elections."],
+     "cons": ["Needs a computer (iterative, not hand-countable).",
+              "Can differ from Scottish STV in very close contests — same ballots, subtler math."],
+     "use": "YDSA NCC/co-chairs and delegate elections; anywhere the bylaws specify Meek."},
+    {"name": "Score voting", "kind": "Rated (multi-winner)", "role": "official",
+     "how": "Voters rate every candidate on a scale (DSA at-large uses 0/1/2 = "
+            "disapprove/neutral/approve). Scores are summed; the highest totals win.",
+     "pros": ["Very expressive — you rate everyone, not just rank.",
+              "Simple to tabulate and hand-verify (just add the columns).",
+              "The exact method in DSA's 2023 at-large delegate rules."],
+     "cons": ["Majoritarian, not proportional — a majority that scores its slate high can win every seat.",
+              "Invites tactical min/max scoring (give only 0s and maxes)."],
+     "use": "At-large delegate elections run under score rules; quick expressive votes."},
+    {"name": "STAR voting", "kind": "Rated (single-winner)", "role": "official",
+     "how": "Score Then Automatic Runoff. Round 1: sum the ratings. Round 2: the two "
+            "highest-scoring candidates go to an automatic runoff, where each ballot counts "
+            "for whichever finalist it scored higher. The runoff winner is elected.",
+     "pros": ["Keeps score's expressiveness but the runoff blunts tactical exaggeration.",
+              "Always elects a candidate a majority preferred over the runner-up.",
+              "Matches the Equal Vote / starvoting.org single-winner definition exactly."],
+     "cons": ["Single-winner by nature; for many seats it becomes Bloc STAR (below).",
+              "Slightly more to explain than plain score."],
+     "use": "Single officers (a chair, a treasurer), tie-broken expressive elections."},
+    {"name": "Bloc STAR", "kind": "Rated (multi-winner, majoritarian)", "role": "official",
+     "how": "STAR run once per seat: elect a STAR winner, remove them, repeat with the same ballots.",
+     "pros": ["Simple multi-winner extension of STAR; good when you want the majority's whole slate."],
+     "cons": ["Majoritarian — a 51% bloc can take 100% of the seats; NOT proportional.",
+              "Use STAR-PR or STV instead for a representative body."],
+     "use": "Small slates where proportionality isn't the goal."},
+    {"name": "STAR-PR (Allocated Score)", "kind": "Rated (proportional)", "role": "official",
+     "how": "Proportional multi-winner STAR. A Hare quota = ballots ÷ seats. Each round elects "
+            "the highest scorer, then 'spends' exactly one quota of ballot weight from the voters "
+            "who scored that winner highest — so a faction that fills a seat has less weight left "
+            "for the next. This is the Equal Vote Coalition's method (and the default multi-winner "
+            "mode in the larryhastings/starvote library).",
+     "pros": ["Proportional like STV, but on expressive rated ballots.",
+              "A cohesive minority earns its fair share of seats."],
+     "cons": ["Newer and less battle-tested than STV in binding elections.",
+              "Quota ballot-spending is computer-only (reproducible, not hand-countable)."],
+     "use": "Multi-seat committees on score ballots where minority representation matters."},
+    {"name": "Plurality / SNTV", "kind": "Comparison", "role": "preview",
+     "how": "Each ballot counts for its first choice only; the top vote-getters win.",
+     "pros": ["The most familiar method; trivial to count."],
+     "cons": ["Severe vote-splitting; 'spoiler' effects; not proportional."],
+     "use": "Recount comparison only — see how a contest would look under plain plurality."},
+    {"name": "Approval", "kind": "Comparison", "role": "preview",
+     "how": "Every candidate a voter marked (here, ranked at all) counts as approved; most approvals win.",
+     "pros": ["Simple; no vote-splitting between similar candidates."],
+     "cons": ["Ignores strength of preference; majoritarian."],
+     "use": "Recount comparison only."},
+    {"name": "Borda count", "kind": "Comparison", "role": "preview",
+     "how": "Points by rank: a first choice earns the most, each lower rank one point less.",
+     "pros": ["Rewards broad consensus candidates."],
+     "cons": ["Easy to game with strategic ranking; rarely used for binding elections."],
+     "use": "Recount comparison only."},
+    {"name": "Instant-Runoff (IRV / RCV)", "kind": "Comparison", "role": "preview",
+     "how": "Single-winner ranked choice: the lowest candidate is eliminated and their ballots "
+            "transfer until someone has a majority. For multiple seats RosaVote runs it "
+            "sequentially (elect, remove, repeat).",
+     "pros": ["Familiar 'ranked-choice voting' as used in many US public elections.",
+              "Guarantees a majority winner for a single seat."],
+     "cons": ["Sequential/for-many-seats it is majoritarian, NOT proportional (unlike STV)."],
+     "use": "Recount comparison; single-seat ranked contests where a majority winner is the goal."},
+    {"name": "MNTV / block plurality", "kind": "Comparison", "role": "preview",
+     "how": "Each voter casts up to as many equal votes as there are seats (here, their top "
+            "preferences); the highest vote-getters fill the seats.",
+     "pros": ["Simple and familiar for multi-seat races on a single ballot."],
+     "cons": ["Strongly majoritarian — a coordinated majority sweeps every seat; not proportional."],
+     "use": "Recount comparison only — the OpaVote-documented block-voting baseline."},
+]
+
+
+def _methods_html():
+    rows = []
+    for m in METHODS:
+        badge = ("<span class='role o'>Official count</span>" if m["role"] == "official"
+                 else "<span class='role p'>Comparison preview</span>")
+        pros = "".join(f"<li>{_esc(p)}</li>" for p in m["pros"])
+        cons = "".join(f"<li>{_esc(c)}</li>" for c in m["cons"])
+        rows.append(
+            f"<div class='m'><h2>{_esc(m['name'])} <small>{_esc(m['kind'])}</small> {badge}</h2>"
+            f"<p>{_esc(m['how'])}</p>"
+            f"<div class='pc'><div><p class='k'>Pros</p><ul class='pro'>{pros}</ul></div>"
+            f"<div><p class='k'>Cons</p><ul class='con'>{cons}</ul></div></div>"
+            f"<p class='use'><b>Best for:</b> {_esc(m['use'])}</p></div>")
+    body = (
+        "<p>RosaVote runs several voting methods. <b>Official count</b> methods can be a "
+        "contest's binding result; <b>comparison preview</b> methods let an administrator see "
+        "how the same ballots would turn out under another rule (never the official result). "
+        "Proportional methods (STV, Meek, STAR-PR) give a like-minded group seats in proportion "
+        "to its support; majoritarian methods can let a 51% bloc take every seat. Every method "
+        "here is documented, tested, and reproducible — see the "
+        "<a href='/accuracy'>accuracy &amp; tests</a> page.</p>"
+        + "".join(rows)
+        + "<p style='margin-top:18px'><b>Quota requirements</b> (diversity minimums/maximums, "
+        "e.g. the YDSA NCC's ‘at least 5 non-cis-men, at least 4 people of color’) can be layered "
+        "onto any STV, Meek, or Score/STAR contest: candidates barred by a maximum are passed over, "
+        "and seats are reserved so a minimum is never stranded — across a whole body of contests "
+        "when needed.</p>")
+    extra = ("<style>.m{{border:1px solid #000;box-shadow:4px 4px 0 0 #000;background:#fff;"
+             "padding:12px 14px;margin:0 0 16px}}.m h2{{font-size:1.02rem;margin:0 0 6px}}"
+             ".m h2 small{{font-weight:400;color:#555;font-size:.8rem}}"
+             ".role{{font-size:.62rem;font-weight:700;text-transform:uppercase;padding:2px 6px;"
+             "border:1px solid #000;white-space:nowrap}}.role.o{{background:#dd1111;color:#fff}}"
+             ".role.p{{background:#ffe1b2}}.pc{{display:flex;gap:16px;flex-wrap:wrap}}"
+             ".pc>div{{flex:1;min-width:180px}}.k{{font-weight:700;font-size:.72rem;"
+             "text-transform:uppercase;margin:4px 0 2px}}.m ul{{margin:2px 0 6px 18px}}"
+             ".m li{{margin:0 0 3px;font-size:.9rem}}ul.pro li{{list-style:'✓ '}}"
+             "ul.con li{{list-style:'✕ '}}.use{{font-size:.88rem;margin:6px 0 0}}</style>")
+    return _LEGAL_SHELL.replace("</head>", extra + "</head>").format(
+        title="Voting Methods", body=body)
+
+
+@app.get("/methods")
+def methods_page():
+    return Response(_methods_html(), mimetype="text/html")
+
+
+# ---- RosaVote & OpaVote (DSA context) -----------------------------------
+# A respectful, DSA-specific comparison. OpaVote has been DSA's trusted
+# election platform for eight years; this page frames RosaVote as a
+# complementary open-source option, not a competitor — two tools with
+# different trade-offs that read the same standard ballot files.
+_VS_ROWS = [
+    ("Setup & hosting",
+     "Fully hosted and supported — nothing to run. DSA's trusted election "
+     "platform for eight years.",
+     "Self-hosted on DSA's own Google Cloud project; your team runs and "
+     "maintains it."),
+    ("Software model",
+     "A professionally built and maintained service, refined over years of "
+     "real elections.",
+     "Open source under AGPL-3.0 — the code is public, so anyone can read, "
+     "host, or extend it."),
+    ("Where ballots live",
+     "On OpaVote's hosted platform, purpose-built for running elections "
+     "securely.",
+     "In DSA's own cloud and data warehouse, so ballots stay on DSA "
+     "infrastructure."),
+    ("Cost",
+     "Nonprofit-friendly per-election pricing — a big reason it fits DSA's "
+     "dues-funded budget.",
+     "Runs on cloud DSA already operates, at minimal marginal cost."),
+    ("Counting methods",
+     "A broad, battle-tested menu — Scottish STV, Borda, IRV, approval, "
+     "Condorcet and more.",
+     "Scottish + Meek STV and Score/STAR/STAR-PR, plus the same comparison "
+     "methods (Borda, IRV, Condorcet, SPAV…)."),
+    ("Voter verification",
+     "Publishes results and, on request, a ballot file so counts can be "
+     "checked.",
+     "Adds a per-voter receipt, a public hash chain, and an in-browser "
+     "verifier for each voter."),
+    ("Independent recount",
+     "Exports standard .blt ballot files that any STV tool can re-run.",
+     "Publishes .blt files plus a tamper-evident hash chain and a bundled "
+     "verifier."),
+    ("DSA-specific rules",
+     "General-purpose; diversity quotas and bylaw timing are applied by the "
+     "operator around the tool.",
+     "Diversity-quota reservations, Article V timing, delegate alternates, and "
+     "scoped admin built in."),
+    ("Notifications",
+     "Handles ballot email delivery as part of the service.",
+     "Sends via Mailgun / Twilio / Scale to Win with a self-serve opt-out "
+     "page and bounce resend."),
+    ("Support & track record",
+     "Commercial support and eight years of proven use across DSA chapters and "
+     "national.",
+     "DSA-maintained and newer; support is in-house, best where staff are "
+     "comfortable with the cloud project."),
+]
+
+
+def _vs_opavote_html():
+    rows = "".join(
+        f"<tr><th scope='row'>{_esc(feat)}</th>"
+        f"<td data-l='OpaVote'>{_esc(op)}</td>"
+        f"<td class='rv' data-l='RosaVote'>{_esc(rv)}</td></tr>"
+        for feat, op, rv in _VS_ROWS)
+    body = (
+        "<p>OpaVote has been DSA's election platform for eight years — an "
+        "affordable, well-supported service that has run countless chapter and "
+        "national votes, and a natural fit for a democratic, dues-funded "
+        "organization. It remains an excellent choice, and RosaVote is not a "
+        "replacement for that partnership.</p>"
+        "<p>RosaVote is a <b>complementary, open-source option</b> for chapters "
+        "that want to self-host elections on DSA infrastructure, give members "
+        "cryptographic ballot verification, or use DSA-specific rules out of the "
+        "box. Because both tools read and write the same standard ballot files, "
+        "you're never locked in — a chapter can even run on one and independently "
+        "recount on the other.</p>"
+        "<table class='vs'><thead><tr><th></th>"
+        "<th>OpaVote</th><th class='rv'>RosaVote</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        "<h2>Where OpaVote shines</h2>"
+        "<ul><li>Proven and fully supported, with no infrastructure for you to "
+        "run.</li>"
+        "<li>Nonprofit pricing that fits a dues-funded budget.</li>"
+        "<li>Eight years of trust across DSA chapters and national, and a "
+        "polished results experience.</li>"
+        "<li>A mature, well-tested set of counting methods.</li></ul>"
+        "<h2>Where RosaVote can help</h2>"
+        "<ul><li>You want to self-host and keep ballots entirely on DSA "
+        "infrastructure.</li>"
+        "<li>You want members to verify their own ballot, and anyone to recount "
+        "from a public hash chain.</li>"
+        "<li>You need DSA-specific quotas, Article V timing, or scoped "
+        "chapter/national admin out of the box.</li>"
+        "<li>You want to build on or extend an open-source tool.</li></ul>"
+        "<p style='margin-top:14px'>The goal is to widen the options available to "
+        "the movement — more ways for members to govern themselves democratically "
+        "— not to replace a partnership that works well.</p>"
+        "<p class='fine' style='margin-top:14px'>Not affiliated with or endorsed "
+        "by OpaVote; OpaVote is a trademark of its owners. Descriptions here "
+        "reflect OpaVote's public documentation and its June 2026 DSA case study, "
+        "and corrections are welcome via the source repository.</p>")
+    extra = ("<style>table.vs{{border-collapse:collapse;width:100%;margin:8px 0 4px;"
+             "font-size:.9rem}}table.vs th,table.vs td{{border:1px solid #000;"
+             "padding:8px 10px;text-align:left;vertical-align:top}}"
+             "table.vs thead th{{background:#111;color:#fff;font-size:.8rem}}"
+             "table.vs thead th.rv{{background:#111;"
+             "border-bottom:3px solid #dd1111}}"
+             "table.vs th[scope=row]{{background:#f4f4f4;width:20%;font-weight:700}}"
+             "table.vs td{{background:#fafafa}}table.vs td.rv{{background:#fff5f5}}"
+             "h2{{font-size:1.02rem;margin:18px 0 4px}}"
+             "@media(max-width:640px){{table.vs,table.vs tbody,table.vs tr,"
+             "table.vs td,table.vs th{{display:block;width:auto!important}}"
+             "table.vs thead{{display:none}}table.vs tr{{margin:0 0 12px;"
+             "border:2px solid #000}}"
+             "table.vs td::before{{content:attr(data-l);font-weight:700;"
+             "display:block;font-size:.7rem;text-transform:uppercase;"
+             "color:#dd1111;margin-bottom:2px}}}}</style>")
+    return _LEGAL_SHELL.replace("</head>", extra + "</head>").format(
+        title="RosaVote & OpaVote", body=body)
+
+
+@app.get("/vs-opavote")
+def vs_opavote_page():
+    return Response(_vs_opavote_html(), mimetype="text/html")
 
 
 @app.get("/terms")

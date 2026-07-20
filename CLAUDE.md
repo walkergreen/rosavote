@@ -14,6 +14,22 @@ gcloud run deploy member-ballot-v3 --source ballot-v2 --region us-east1 \
   --set-secrets ADMIN_TOKEN=ballot-admin-token:latest
 # live: https://member-ballot-v3-62155002849.us-east1.run.app
 # (member-ballot-v2 + older services are previous prototypes — deletion candidates)
+# STAGING: ./deploy-staging.sh (service rosavote-staging, own Firestore db+token).
+#   Domain/edge/DDoS: infra/STAGING_AND_EDGE.md + infra/cloud-armor.sh
+# ENV VARS: ADMIN_TOKEN; FIRESTORE_DATABASE (named db for staging isolation;
+#   unset=prod default); CANONICAL_HOST (301 any other host here — registrar-
+#   independent .com->.org redirect; unset=off; see _canonical_host_redirect);
+#   SOURCE_URL (AGPL-3.0 §13 source-offer link in every footer).
+#
+# CODE DELIVERY: tools/generate_codes.py mints codes + distribution_manifest.csv
+#   from the real roll. tools/send_codes.py delivers each member their one-tap
+#   link — EMAIL via Mailgun (batched, recipient-variables) + SMS via Scale to
+#   Win / Twilio. senders.sms_sender() picks Twilio (transactional; TWILIO_*)
+#   > Scale to Win API (STW_API_URL) > STW campaign-CSV export — use Twilio for
+#   one-off /resend texts. Idempotent (sent-log),
+#   dry-run, PII-safe (counts only). tools/senders.py = shared Mailgun/STW
+#   channels (also used by tools/resend.py). `send_codes.py --self-test` runs
+#   offline; also covered by smoke_test.
 
 # full offline smoke test (no GCP credentials needed — stubs Firestore):
 python3 tools/smoke_test.py       # use .venv/bin/python if flask isn't global
@@ -27,7 +43,7 @@ python3 -c "import re; open('/tmp/t.js','w').write(re.search(r'<script>(.*)</scr
 # console for errors is the fallback; same applies to admin_console.html)
 
 # tabulation accuracy: regression over real BLT election files + live replay:
-python3 tools/blt_regression.py            # 29 real elections, deterministic, 0 errors
+python3 tools/blt_regression.py            # 40 real elections + 2 score/STAR fixtures, deterministic, 0 errors
 python3 tools/replay_election.py <f.blt> --base <host> --token $TOK  # cast via live API, verify
 # results surfaced on the /accuracy page.
 
@@ -94,9 +110,14 @@ A poll's config may carry a `questions` list — ordered, any mix of types:
 `yesno` (Y/N + optional Abstain) · `ranked` (Scottish STV; options, seats,
 alternates>0 ⇒ two-count method + over-seat black styling; `secret` ⇒ stored
 in the admin-only secret collection; `delegate` ⇒ additionally Art. V rules;
-`shuffle` ⇒ random option order per load) · `multi` (optional multi-select,
-exclusive Abstain) · `text` (free text; stored as identity-linked comment,
-never in canonical answers). Rendering (`_question_html`), validation
+`shuffle` ⇒ random option order per load) · `score` (Score/STAR voting;
+options+`max_score` (default 2), `seats`, `method: score|star`; voters rate
+every candidate 0..max_score; answer stored as `{option_id: score}`;
+`require_full` (default true) ⇒ every candidate must be scored; same
+`constraints`/tags/`quota_group` support as ranked) · `multi` (optional
+multi-select, exclusive Abstain) · `text` (free text; stored as
+identity-linked comment, never in canonical answers). Rendering
+(`_question_html`), validation
 (`validate_answers`), storage split (`_write_ballot_docs`), the console
 builder (JSON editor + presets), and `make_blt.py --from-firestore` are all
 driven by this schema. Standalone referendums and officer elections need no
@@ -130,7 +151,32 @@ both outcomes.
 
 Ranked questions choose their counting method: `method: scottish` (default)
 or `meek` (official Meek STV — required for YDSA delegate elections; full
-stage log; constraints/groups supported). Published results FREEZE into
+stage log; constraints/groups supported). Score questions choose `score`
+(sum of 0..max_score ratings; highest totals win; ties → most top-scores →
+lot), `star` (Score Then Automatic Runoff; single-seat = standard STAR,
+multi-seat = Bloc STAR, majoritarian), or `star_pr` (STAR-PR / Allocated
+Score — proportional multi-winner, Hare-quota ballot spending; matches the
+Equal Vote / larryhastings/starvote method). Alt/preview methods
+(`count_alternative`) add `mntv` (block plurality). Constraints may set
+`local: true` to be enforced WITHIN one contest with NO later-contest relief
+(e.g. YDSA NCC 'at least one co-chair a non-cis man'). Ranked questions may
+set `eliminate_winners_of: [earlier_keys]` — winners of those earlier
+contests are WITHDRAWN from this count (Metro DC 'an officer is removed from
+the at-large race'; match people by shared option id). Multi-contest builder
+presets (`_multi`): `ncc` (2 co-chairs + 7 at-large, Meek, body-wide min 5
+non-cis-men incl. a co-chair + min 4 POC), `metrodc` (3 STV officers + 8
+at-large with officer→at-large elimination, body-wide majority
+women/POC/nonbinary), `nyc_cochairs` (2 seats, max 1 cis man).
+Polls can be ARCHIVED (national only): `POST /admin/api/polls/<id>/archive`
++ `/unarchive` set `archived` on the config doc. `load_polls` skips archived
+(so voting/public paths never see them), but `GET /admin/api/polls` includes
+them with an `archived` flag for the console's Archived section.
+`stv_tabulate.count_score/count_star` take a score-ballot text via
+`parse_scores` (`_scores_text` builds it in-app) and honour the same
+quota/tag/group params; the DSA at-large 0/1/2 delegate rules with gender/
+racial-minority reservations are exactly `count_score(constraints=…)`.
+recount_preview accepts `score|star` on a score question (the other of the
+two). Published results FREEZE into
 `{poll}__published/results` (JSON blob) at publish time + in-process cache —
 public page + admin results serve the frozen copy (`?fresh=1` recomputes).
 Demo console carries `npc_atlarge_2025` — the real 2025 NPC At-Large

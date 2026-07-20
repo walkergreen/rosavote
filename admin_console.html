@@ -1,4 +1,6 @@
-<!doctype html><html lang="en"><head>
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- SPDX-FileCopyrightText: 2026 Walker Green --><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Admin Console — RosaVote</title>
 <link rel="icon" href="/logo.svg" type="image/svg+xml"/>
@@ -270,6 +272,7 @@
         <div class="row" style="margin:0 0 4px">
           <button class="btn sm" id="q-add-yesno" style="margin-top:0">＋ Yes / No measure</button>
           <button class="btn sm" id="q-add-ranked" style="margin-top:0">＋ Ranked election</button>
+          <button class="btn sm" id="q-add-score" style="margin-top:0">＋ Score / STAR</button>
           <button class="btn sm" id="q-add-multi" style="margin-top:0">＋ Multi-select</button>
           <button class="btn sm" id="q-add-text" style="margin-top:0">＋ Free-text</button>
         </div>
@@ -278,7 +281,11 @@
           <button class="btn ghost sm" data-preset="referendum">Referendum</button>
           <button class="btn ghost sm" data-preset="officer">Officer election</button>
           <button class="btn ghost sm" data-preset="delegates">Delegate election</button>
+          <button class="btn ghost sm" data-preset="scoredelegates">Score delegates</button>
           <button class="btn ghost sm" data-preset="leadership">Leadership w/ quotas</button>
+          <button class="btn ghost sm" data-preset="ncc">YDSA NCC (full body)</button>
+          <button class="btn ghost sm" data-preset="metrodc">Metro DC Steering (full body)</button>
+          <button class="btn ghost sm" data-preset="nyc_cochairs">NYC Co-Chairs</button>
           <button class="btn ghost sm" data-preset="feedback">Free-text</button>
           <button class="btn ghost sm" data-preset="pledges">Multi-select</button>
         </div>
@@ -294,10 +301,16 @@
           <div id="qe-ranked">
             <div class="row">
               <div><label>Seats to elect</label><input type="number" id="qe-seats" min="1" value="1"/></div>
-              <div><label>Alternates <small>(two-count)</small></label><input type="number" id="qe-alts" min="0" value="0"/></div>
+              <div><label>Alternates</label><input type="number" id="qe-alts" min="0" value="0"/></div>
               <div><label>Counting method</label><select id="qe-method">
                 <option value="scottish">Scottish STV</option>
                 <option value="meek">Meek STV (YDSA delegates)</option></select></div>
+            </div>
+            <div class="row" id="qe-altmethodrow" style="margin-top:8px;display:none">
+              <div><label>Alternate method <button type="button" class="info-i" data-info="altmethod" aria-label="Alternate method">i</button></label>
+              <select id="qe-altmethod">
+                <option value="expanded">Expanded count (recommended) — next in line</option>
+                <option value="replacement">Replacement re-run — winners removed</option></select></div>
             </div>
             <div class="row" style="margin-top:8px">
               <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
@@ -307,15 +320,34 @@
             <div class="row" style="margin-top:8px">
               <div><label style="display:inline">Require a complete ranking </label><input type="checkbox" id="qe-fullvote" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="fullvote" aria-label="Require complete ranking">i</button></div>
             </div>
+          </div>
+          <div id="qe-score" style="display:none">
+            <div class="row">
+              <div><label>Seats to elect</label><input type="number" id="qe-s-seats" min="1" value="1"/></div>
+              <div><label>Max score</label><input type="number" id="qe-s-max" min="1" max="10" value="2"/></div>
+              <div><label>Method</label><select id="qe-s-method">
+                <option value="score">Score (highest totals win)</option>
+                <option value="star">STAR (score-then-runoff; multi-seat = Bloc)</option>
+                <option value="star_pr">STAR-PR (proportional, Allocated Score)</option></select></div>
+            </div>
             <div class="row" style="margin-top:8px">
-              <div><label style="display:inline">Quota requirements (diversity)</label>
-                <input type="checkbox" id="qe-quota" style="width:18px;height:18px"/></div>
+              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-s-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
+              <div><label style="display:inline">Shuffle order per voter </label><input type="checkbox" id="qe-s-shuffle" style="width:18px;height:18px" checked/></div>
+              <div><label style="display:inline">Require every candidate scored </label><input type="checkbox" id="qe-s-full" style="width:18px;height:18px" checked/><button type="button" class="info-i" data-info="scorefull" aria-label="Require every candidate scored">i</button></div>
             </div>
-            <div id="qe-quotawrap" style="display:none">
-              <label>Constraints — one per line: <code>tag max N</code> or <code>tag min N | Label</code></label>
-              <textarea id="qe-constraints" style="min-height:56px" placeholder="cis_man max 13 | No more than 13 cis men&#10;marginalized min 8 | At least 8 nationally marginalized members"></textarea>
-              <p style="font-size:.72rem;margin:4px 0 0">Candidate attribute tags below become required once quotas are on.</p>
-            </div>
+            <p style="font-size:.72rem;margin:6px 0 0">Voters rate every candidate 0–max
+            (DSA at-large delegates use 0/1/2 = disapprove/neutral/approve). Score sums the
+            ratings; STAR runs an automatic runoff between the two highest. Quota requirements
+            below apply to both.<button type="button" class="info-i" data-info="score" aria-label="Score / STAR voting">i</button></p>
+          </div>
+          <div id="qe-quotarow" class="row" style="margin:8px 0 0;display:none">
+            <div><label style="display:inline">Quota requirements (diversity)</label>
+              <input type="checkbox" id="qe-quota" style="width:18px;height:18px"/></div>
+          </div>
+          <div id="qe-quotawrap" style="display:none">
+            <label>Constraints — one per line: <code>tag max N</code> or <code>tag min N | Label</code></label>
+            <textarea id="qe-constraints" style="min-height:56px" placeholder="cis_man max 13 | No more than 13 cis men&#10;marginalized min 8 | At least 8 nationally marginalized members"></textarea>
+            <p style="font-size:.72rem;margin:4px 0 0">Candidate attribute tags below become required once quotas are on.</p>
           </div>
           <div id="qe-optwrap">
             <label id="qe-optlabel">Candidates / options</label>
@@ -354,7 +386,7 @@
         <p>Results unlock when a poll is <b>finalized</b> (automatic ~15 minutes
         after close)<button type="button" class="info-i" data-info="finalize" aria-label="Why 15 minutes?">i</button>.
         Ranked contests are counted here by the shipped Scottish
-        STV tabulator — delegate contests include the alternates recount<button type="button" class="info-i" data-info="twocount" aria-label="Two-count method">i</button>.
+        STV tabulator — delegate contests include the alternates recount<button type="button" class="info-i" data-info="twocount" aria-label="How alternates are decided">i</button>.
         Free-text answers are counted, never displayed. National sees every
         poll; chapter tokens see their own.</p>
         <div id="results-overview"></div>
@@ -391,7 +423,7 @@
             <code>python3 tools/stv_tabulate.py contest.blt</code> — it prints the
             same round-by-round table the Results tab charts. Yes/No contests are
             1-seat files where the counts are directly visible.</p>
-            <p style="font-size:.82rem"><b>3 · Delegate alternates (two-count method).</b> Download
+            <p style="font-size:.82rem"><b>3 · Delegate alternates (expanded count).</b> Download
             the same contest with "recount" — identical ballots, seats set to
             delegates+alternates. Winners of the recount who aren't already
             delegates are the alternates, in order of election.</p>
@@ -522,13 +554,21 @@ var INFO = {
     "buffer so late-arriving or in-flight ballots settle and an administrator can adjudicate "+
     "any pending provisionals before the count is called final. National admins can view a "+
     "live (uncertified) tally at any time."],
-  twocount: ["Two-count method for alternates",
-    "Delegates and alternates are decided from the <b>same ballots</b> in two passes. "+
-    "Count 1 runs Scottish STV for the delegate seats — its winners are the delegates. "+
-    "Count 2 re-runs the identical ballots with seats set to delegates + alternates; anyone "+
-    "elected in that larger count who is <i>not</i> already a delegate becomes an alternate, "+
-    "in order of election. This is more principled than taking 'next highest' from a stopped "+
-    "count, and both passes are reproducible from the published BLT."],
+  twocount: ["How alternates are decided",
+    "Delegates and alternates come from the <b>same ballots</b>. Count 1 runs STV for the "+
+    "delegate seats — its winners are the delegates. The alternates are then decided by a "+
+    "second count using the <b>alternate method</b> set on the question (see its own info "+
+    "icon). Both passes are reproducible from the published BLT."],
+  altmethod: ["Alternate method — expanded vs replacement",
+    "There is <b>no official DSA-mandated method</b> for pre-selecting alternates; this is a "+
+    "genuine choice. <b>Expanded count</b> (default): re-run STV for delegates + alternates and "+
+    "take the extra winners as alternates, in order — the 'next in line' if the body were "+
+    "larger. <b>Replacement re-run</b>: remove every elected delegate and re-run for just the "+
+    "alternate seats — who would win if no delegate had run. Both are proportional STV; they "+
+    "differ in which voters the alternate answers to (expanded tends toward the next-largest "+
+    "unrepresented group; replacement tends toward the largest bloc's next choice). When a "+
+    "delegate actually resigns and you know who, the most faithful option is neither — use the "+
+    "results-page <b>dropout recount</b> to remove that specific person and recount."],
   secret: ["Secret ballot",
     "A secret-ballot question is stored in a separate collection with <b>no member name and "+
     "no chapter</b> attached — only a random receipt and a code hash for troubleshooting. "+
@@ -541,6 +581,21 @@ var INFO = {
     "— the whole voting window must fall between 4 months and 45 days before the convention, "+
     "with apportionment confirmed first. Use this only for National Convention delegate "+
     "elections; ordinary chapter officer elections don't need it."],
+  score: ["Score / STAR voting",
+    "Voters rate <b>every candidate</b> on a 0–max scale rather than ranking them; the same "+
+    "score can go to more than one candidate. DSA's at-large convention-delegate elections use "+
+    "0/1/2 (disapprove / neutral / approve). <b>Score</b> simply adds each candidate's ratings "+
+    "and elects the highest totals; ties break by the number of top ('approve') scores, then by "+
+    "lot. <b>STAR</b> (Score Then Automatic Runoff) takes the two highest-scoring candidates and "+
+    "elects whichever more voters scored higher — for a single seat that's the standard method; "+
+    "multi-seat STAR runs sequentially and is majoritarian, so use ranked STV/Meek when you need "+
+    "proportional representation. Diversity quotas apply to both: a candidate whose election "+
+    "would break a maximum is passed over for the next-highest score, and seats are reserved so "+
+    "a minimum is never stranded — exactly the DSA at-large rules."],
+  scorefull: ["Require every candidate scored",
+    "DSA's score rules require a voter to rate <b>every</b> candidate for the ballot to be "+
+    "accepted (an unrated candidate is ambiguous — is it a 0 or an oversight?). Turn this off to "+
+    "let voters leave some blank, in which case an unscored candidate counts as 0."],
   fullvote: ["Require a complete ranking",
     "When on, a voter must rank <b>every</b> candidate for their ballot to be accepted "+
     "(no partial rankings, no early stop). <b>Use it</b> for small slates where a full "+
@@ -653,8 +708,10 @@ function loadPolls(){
   api("/admin/api/polls").then(function(r){
     if(r.status!==200){ $("polls-list").innerHTML="<p>Failed to load.</p>"; return; }
     POLLS = r.body;
-    var ids = Object.keys(POLLS);
-    $("polls-list").innerHTML = ids.length ? "" : "<p>No polls visible to this token.</p>";
+    var allIds = Object.keys(POLLS);
+    var ids = allIds.filter(function(pid){ return !POLLS[pid].archived; });
+    var archivedIds = allIds.filter(function(pid){ return POLLS[pid].archived; });
+    $("polls-list").innerHTML = allIds.length ? "" : "<p>No polls visible to this token.</p>";
     ids.forEach(function(pid){
       var c = POLLS[pid];
       var div = document.createElement("div"); div.className="poll";
@@ -705,11 +762,47 @@ function loadPolls(){
           if(r2.status===200) loadPolls(); else alert("Close failed: "+JSON.stringify(r2.body));
         });
       };
-      btns.appendChild(edit); btns.appendChild(close); div.appendChild(btns);
+      btns.appendChild(edit); btns.appendChild(close);
+      if(window.IDENT && window.IDENT.role==="national"){
+        var arch = document.createElement("button"); arch.className="btn ghost sm"; arch.style.marginLeft="6px";
+        arch.textContent="Archive";
+        arch.onclick = function(){
+          if(!confirm("Archive "+c.name+"? It leaves the active list and stops accepting votes "+
+            "(ballots and results are kept, not deleted). You can unarchive it anytime.")) return;
+          api("/admin/api/polls/"+pid+"/archive", {method:"POST", body:"{}"}).then(function(r2){
+            if(r2.status===200) loadPolls(); else alert("Archive failed: "+JSON.stringify(r2.body));
+          });
+        };
+        btns.appendChild(arch);
+      }
+      div.appendChild(btns);
       $("polls-list").appendChild(div);
     });
+    if(archivedIds.length){
+      var head = document.createElement("div"); head.style.cssText="margin:14px 0 6px;font-weight:700;font-size:.8rem;color:#666";
+      head.textContent = "Archived ("+archivedIds.length+")";
+      $("polls-list").appendChild(head);
+      archivedIds.forEach(function(pid){
+        var c = POLLS[pid];
+        var div = document.createElement("div"); div.className="poll"; div.style.opacity=".7";
+        div.innerHTML = "<div><b>"+esc(c.name)+"</b> <span class='chip'>archived</span>"+
+          (c.finalized ? " <span class='chip closed'>finalized</span>" : "")+"<br/><code>"+esc(pid)+"</code></div>";
+        var btns = document.createElement("div");
+        var vr = document.createElement("button"); vr.className="btn ghost sm"; vr.textContent="View results"; vr.style.marginRight="6px";
+        vr.onclick = function(){ document.querySelector('[data-pane="results-pane"]').click(); $("results-poll").value=pid; loadResults(false); window.scrollTo(0,0); };
+        btns.appendChild(vr);
+        var un = document.createElement("button"); un.className="btn sm"; un.textContent="Unarchive";
+        un.onclick = function(){
+          api("/admin/api/polls/"+pid+"/unarchive", {method:"POST", body:"{}"}).then(function(r2){
+            if(r2.status===200) loadPolls(); else alert("Unarchive failed: "+JSON.stringify(r2.body));
+          });
+        };
+        btns.appendChild(un); div.appendChild(btns);
+        $("polls-list").appendChild(div);
+      });
+    }
     ["prov-poll","void-poll","voters-poll","results-poll"].forEach(function(sel){
-      $(sel).innerHTML = ids.map(function(pid){ return "<option value='"+esc(pid)+"'>"+esc(POLLS[pid].name)+" ("+esc(pid)+")</option>"; }).join("");
+      $(sel).innerHTML = allIds.map(function(pid){ return "<option value='"+esc(pid)+"'>"+esc(POLLS[pid].name)+(POLLS[pid].archived?" [archived]":"")+" ("+esc(pid)+")</option>"; }).join("");
     });
     renderResultsOverview();
   });
@@ -793,9 +886,79 @@ var PRESETS = {
   delegates: {key:"delegates_N", type:"ranked", label:"Convention delegates — ranked choice",
     title:"Elect N delegates + N alternates", seats:2, alternates:1,
     secret:true, delegate:true, shuffle:true,
-    text:["Scottish STV, two-count method for alternates. Secret ballot (Const. Art. V §5). Requires a convention date + apportionment above."],
+    text:["Scottish STV, expanded count for alternates (admin-selectable). Secret ballot (Const. Art. V §5). Requires a convention date + apportionment above."],
     options:[{id:"CAND1",name:"Candidate One"},{id:"CAND2",name:"Candidate Two"},
              {id:"CAND3",name:"Candidate Three"}]},
+  scoredelegates: {key:"score_delegates_N", type:"score", label:"At-large delegates — score voting",
+    title:"Score the at-large delegate candidates", seats:8, max_score:2, method:"score",
+    secret:true, shuffle:true, require_full:true,
+    text:["Score voting (0 = disapprove, 1 = neutral, 2 = approve). Highest totals win; DSA at-large convention-delegate method. Add quota tags + constraints for the Art. VI gender/racial-minority reservations."],
+    options:[{id:"CAND1",name:"Candidate One",tags:[]},
+             {id:"CAND2",name:"Candidate Two",tags:["man"]},
+             {id:"CAND3",name:"Candidate Three",tags:["racial_minority"]}],
+    constraints:[{tag:"man",max:4,label:"No more than half the seats to men"},
+                 {tag:"racial_minority",min:2,label:"At least one-fifth reserved for national/racial minorities"}]},
+  ncc: {_multi:true,
+    quota_groups:{ncc:[
+      {tag:"non_cis_man",min:5,label:"At least 5 non-cis men on the NCC (including one co-chair)"},
+      {tag:"poc",min:4,label:"At least 4 people of color on the NCC"}]},
+    questions:[
+      {key:"ncc_cochairs", type:"ranked", method:"meek", label:"Co-Chairs — Meek STV",
+       title:"YDSA NCC Co-Chairs", seats:2, secret:true, shuffle:true, quota_group:"ncc",
+       text:["Two co-chairs, elected by Meek STV. At least one co-chair must be a self-identified non-cis man — enforced within this contest."],
+       constraints:[{tag:"non_cis_man",min:1,local:true,label:"At least one co-chair a non-cis man"}],
+       options:[{id:"CC1",name:"Co-Chair Candidate 1",tags:["non_cis_man","poc"]},
+                {id:"CC2",name:"Co-Chair Candidate 2",tags:[]},
+                {id:"CC3",name:"Co-Chair Candidate 3",tags:["non_cis_man"]}]},
+      {key:"ncc_atlarge", type:"ranked", method:"meek", label:"At-Large (7) — Meek STV",
+       title:"YDSA NCC At-Large Members", seats:7, secret:true, shuffle:true, quota_group:"ncc",
+       text:["Seven at-large officers, elected by Meek STV. Body-wide quotas apply across the whole nine-member NCC (co-chairs + at-large): at least 5 non-cis men and at least 4 people of color."],
+       options:[{id:"AL1",name:"At-Large Candidate 1",tags:["non_cis_man"]},
+                {id:"AL2",name:"At-Large Candidate 2",tags:["poc"]},
+                {id:"AL3",name:"At-Large Candidate 3",tags:["non_cis_man","poc"]},
+                {id:"AL4",name:"At-Large Candidate 4",tags:[]},
+                {id:"AL5",name:"At-Large Candidate 5",tags:["poc"]},
+                {id:"AL6",name:"At-Large Candidate 6",tags:["non_cis_man"]},
+                {id:"AL7",name:"At-Large Candidate 7",tags:[]},
+                {id:"AL8",name:"At-Large Candidate 8",tags:["non_cis_man","poc"]}]}]},
+  nyc_cochairs: {key:"nyc_cochairs_N", type:"ranked", method:"scottish",
+    label:"Co-Chairs — Scottish STV, quota", title:"NYC-DSA Co-Chairs", seats:2,
+    secret:true, shuffle:true,
+    text:["Two co-chairs, Scottish STV. No more than one co-chair may identify as a cis man (enforced during the count)."],
+    constraints:[{tag:"cis_man",max:1,label:"No more than one co-chair a cis man"}],
+    options:[{id:"CC1",name:"Co-Chair Candidate 1",tags:["cis_man"]},
+             {id:"CC2",name:"Co-Chair Candidate 2",tags:[]},
+             {id:"CC3",name:"Co-Chair Candidate 3",tags:["cis_man"]},
+             {id:"CC4",name:"Co-Chair Candidate 4",tags:[]}]},
+  metrodc: {_multi:true,
+    quota_groups:{sc:[{tag:"wpocnb",min:6,label:"A majority of the Steering Committee (6 of 11) identify as women, people of color, and/or nonbinary"}]},
+    questions:[
+      {key:"mdc_treasurer", type:"ranked", method:"scottish", label:"Treasurer — Scottish STV",
+       title:"MDC DSA Treasurer", seats:1, secret:true, shuffle:true, quota_group:"sc",
+       text:["Elected separately by Scottish STV."],
+       options:[{id:"T1",name:"Treasurer Candidate 1",tags:["wpocnb"]},{id:"T2",name:"Treasurer Candidate 2",tags:[]}]},
+      {key:"mdc_secretary", type:"ranked", method:"scottish", label:"Secretary — Scottish STV",
+       title:"MDC DSA Secretary", seats:1, secret:true, shuffle:true, quota_group:"sc",
+       text:["Elected separately by Scottish STV."],
+       options:[{id:"S1",name:"Secretary Candidate 1",tags:[]},{id:"S2",name:"Secretary Candidate 2",tags:["wpocnb"]}]},
+      {key:"mdc_campaigns", type:"ranked", method:"scottish", label:"Campaigns Coordinator — Scottish STV",
+       title:"MDC DSA Campaigns Coordinator", seats:1, secret:true, shuffle:true, quota_group:"sc",
+       text:["Elected separately by Scottish STV."],
+       options:[{id:"C1",name:"Campaigns Candidate 1",tags:["wpocnb"]},{id:"C2",name:"Campaigns Candidate 2",tags:[]}]},
+      {key:"mdc_atlarge", type:"ranked", method:"scottish", label:"At-Large (8) — Scottish STV",
+       title:"MDC DSA At-Large Steering Committee", seats:8, secret:true, shuffle:true, quota_group:"sc",
+       eliminate_winners_of:["mdc_treasurer","mdc_secretary","mdc_campaigns"],
+       text:["Eight at-large members on a single ballot, Scottish STV. Anyone elected to an officer position above is eliminated from this at-large count (they can't hold two offices). Body-wide: a majority of the 11-member Steering Committee must identify as women, people of color, and/or nonbinary — use the same candidate id across the officer and at-large ballots for anyone running in both."],
+       options:[{id:"A1",name:"At-Large Candidate 1",tags:["wpocnb"]},
+                {id:"A2",name:"At-Large Candidate 2",tags:[]},
+                {id:"A3",name:"At-Large Candidate 3",tags:["wpocnb"]},
+                {id:"A4",name:"At-Large Candidate 4",tags:["wpocnb"]},
+                {id:"A5",name:"At-Large Candidate 5",tags:[]},
+                {id:"A6",name:"At-Large Candidate 6",tags:["wpocnb"]},
+                {id:"A7",name:"At-Large Candidate 7",tags:[]},
+                {id:"A8",name:"At-Large Candidate 8",tags:["wpocnb"]},
+                {id:"A9",name:"At-Large Candidate 9",tags:["wpocnb"]},
+                {id:"A10",name:"At-Large Candidate 10",tags:[]}]}]},
   feedback: {key:"comments_N", type:"text", label:"Open response — optional",
     title:"Anything the chapter should know?", max:1000},
   pledges: {key:"pledges_N", type:"multi", label:"Check all that apply — optional",
@@ -818,7 +981,7 @@ function optId(name, taken){
   while(taken.indexOf(k)!==-1){ k = base+"_"+n; n++; }
   return k;
 }
-var TYPE_NAMES = {yesno:"Yes / No", ranked:"Ranked", multi:"Multi-select", text:"Free text"};
+var TYPE_NAMES = {yesno:"Yes / No", ranked:"Ranked", score:"Score / STAR", multi:"Multi-select", text:"Free text"};
 function renderQList(){
   var el = $("q-list");
   if(!BQ.length){
@@ -831,6 +994,8 @@ function renderQList(){
       var d = document.createElement("div"); d.className = "qcard";
       d.innerHTML = "<span class='qtype'>"+esc(TYPE_NAMES[q.type]||q.type)+"</span><b>"+(i+1)+".</b> "+esc(q.title||"(untitled)")+
         (q.type==="ranked" ? " <small>"+q.seats+" seat(s)"+(q.method==="meek"?" · Meek":"")+(q.secret?" · secret":"")+(q.delegate?" · delegate":"")+
+          ((q.options||[]).length?" · "+q.options.length+" candidates":"")+"</small>" :
+         q.type==="score" ? " <small>"+(q.seats||1)+" seat(s) · "+(q.method==="star"?"STAR":"Score 0–"+(q.max_score||2))+(q.secret?" · secret":"")+
           ((q.options||[]).length?" · "+q.options.length+" candidates":"")+"</small>" :
          q.type==="multi" ? " <small>"+((q.options||[]).length)+" options</small>" : "");
       var grp = document.createElement("span"); grp.style.marginLeft = "auto";
@@ -867,11 +1032,25 @@ function openEditor(type, idx){
   $("qe-title").value = q.title||""; $("qe-label").value = q.label||"";
   $("qe-desc").value = (q.text||[]).join("\n\n");
   $("qe-ranked").style.display = type==="ranked" ? "" : "none";
-  $("qe-optwrap").style.display = (type==="ranked"||type==="multi") ? "" : "none";
+  $("qe-score").style.display = type==="score" ? "" : "none";
+  $("qe-optwrap").style.display = (type==="ranked"||type==="multi"||type==="score") ? "" : "none";
   $("qe-textwrap").style.display = type==="text" ? "" : "none";
-  $("qe-optlabel").textContent = type==="ranked" ? "Candidates" : "Options";
+  $("qe-optlabel").textContent = (type==="ranked"||type==="score") ? "Candidates" : "Options";
+  if(type==="score"){
+    $("qe-s-seats").value = q.seats||1; $("qe-s-max").value = q.max_score||2;
+    $("qe-s-method").value = q.method||"score";
+    $("qe-s-secret").checked = !!q.secret; $("qe-s-shuffle").checked = q.shuffle!==false;
+    $("qe-s-full").checked = q.require_full!==false;
+    $("qe-quota").checked = !!(q.constraints && q.constraints.length);
+    $("qe-constraints").value = (q.constraints||[]).map(function(cn){
+      var b = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+      return cn.tag+" "+b+(cn.label ? " | "+cn.label : "");
+    }).join("\n");
+  }
   if(type==="ranked"){
     $("qe-seats").value = q.seats||1; $("qe-alts").value = q.alternates||0;
+    $("qe-altmethod").value = q.alternate_method||"expanded";
+    $("qe-altmethodrow").style.display = (parseInt(q.alternates,10)||0)>0 ? "" : "none";
     $("qe-method").value = q.method||"scottish";
     $("qe-secret").checked = !!q.secret; $("qe-delegate").checked = !!q.delegate;
     $("qe-shuffle").checked = q.shuffle!==false;
@@ -882,25 +1061,27 @@ function openEditor(type, idx){
       return cn.tag+" "+b+(cn.label ? " | "+cn.label : "");
     }).join("\n");
   }
-  // quota + tags belong to ranked only, and only when quotas are enabled
-  $("qe-quota").parentNode.style.display = type==="ranked" ? "" : "none";
+  // quota + tags belong to ranked and score, and only when quotas are enabled
+  $("qe-quotarow").style.display = (type==="ranked"||type==="score") ? "" : "none";
   syncQuotaUI();
   if(type==="text") $("qe-max").value = q.max||1000;
   $("qe-opts").innerHTML = "";
   ((q.options)||[]).forEach(addOptRow);
-  if((type==="ranked"||type==="multi") && !(q.options||[]).length){ addOptRow(); addOptRow(); }
+  if((type==="ranked"||type==="multi"||type==="score") && !(q.options||[]).length){ addOptRow(); addOptRow(); }
   $("q-editor").dataset.qtype = type;
   $("q-editor").classList.remove("hide");
   $("qe-title").focus();
 }
 function syncQuotaUI(){
   var type = $("q-editor").dataset.qtype;
-  var on = type==="ranked" && $("qe-quota").checked;
+  var on = (type==="ranked"||type==="score") && $("qe-quota").checked;
   $("qe-quotawrap").style.display = on ? "" : "none";
   $("qe-taghint").style.display = on ? "" : "none";
   document.querySelectorAll("#qe-opts .o-tags").forEach(function(i){ i.style.display = on ? "" : "none"; });
 }
 $("qe-quota").addEventListener("change", syncQuotaUI);
+$("qe-alts").addEventListener("input", function(){
+  $("qe-altmethodrow").style.display = (parseInt(this.value,10)||0)>0 ? "" : "none"; });
 $("qe-addopt").onclick = function(){ addOptRow(); syncQuotaUI(); };
 $("qe-cancel").onclick = function(){ $("q-editor").classList.add("hide"); editIdx = null; };
 $("qe-save").onclick = function(){
@@ -911,7 +1092,7 @@ $("qe-save").onclick = function(){
   var label = $("qe-label").value.trim(); if(label) q.label = label;
   var desc = $("qe-desc").value.trim();
   if(desc) q.text = desc.split(/\n\s*\n/).map(function(p){ return p.trim(); }).filter(Boolean);
-  if(type==="ranked"||type==="multi"){
+  if(type==="ranked"||type==="multi"||type==="score"){
     var taken = [], opts = [];
     Array.prototype.forEach.call($("qe-opts").children, function(row){
       var name = row.querySelector(".o-name").value.trim();
@@ -920,18 +1101,40 @@ $("qe-save").onclick = function(){
       taken.push(id);
       var o = {id: id, name: name};
       var sub = row.querySelector(".o-sub").value.trim(); if(sub) o.sub = sub;
-      if(type==="ranked" && $("qe-quota").checked){
+      if((type==="ranked"||type==="score") && $("qe-quota").checked){
         var tags = row.querySelector(".o-tags").value.trim();
         o.tags = tags ? tags.split(",").map(function(t){ return t.trim(); }).filter(Boolean) : [];
       }
       opts.push(o);
     });
-    if(!opts.length){ alert("Add at least one "+(type==="ranked"?"candidate":"option")+"."); return; }
+    if(!opts.length){ alert("Add at least one "+((type==="ranked"||type==="score")?"candidate":"option")+"."); return; }
     q.options = opts;
+  }
+  if(type==="score"){
+    q.seats = parseInt($("qe-s-seats").value,10)||1;
+    q.max_score = parseInt($("qe-s-max").value,10)||2;
+    q.method = $("qe-s-method").value;
+    if($("qe-s-secret").checked) q.secret = true;
+    q.shuffle = $("qe-s-shuffle").checked;
+    q.require_full = $("qe-s-full").checked;
+    if($("qe-quota").checked){
+      var sc = $("qe-constraints").value.split("\n").map(function(line){
+        line = line.trim(); if(!line) return null;
+        var label = ""; var bar = line.indexOf("|");
+        if(bar>=0){ label = line.slice(bar+1).trim(); line = line.slice(0,bar).trim(); }
+        var m = line.match(/^(\S+)\s+(max|min)\s+(\d+)$/i);
+        if(!m) return null;
+        var c = {tag:m[1].toLowerCase().replace(/\s+/g,"_")}; c[m[2].toLowerCase()] = parseInt(m[3],10);
+        if(label) c.label = label; return c;
+      }).filter(Boolean);
+      if(sc.length) q.constraints = sc;
+    }
+    if(editIdx!==null && BQ[editIdx].quota_group) q.quota_group = BQ[editIdx].quota_group;
   }
   if(type==="ranked"){
     q.seats = parseInt($("qe-seats").value,10)||1;
     q.alternates = parseInt($("qe-alts").value,10)||0;
+    if(q.alternates>0) q.alternate_method = $("qe-altmethod").value;
     q.method = $("qe-method").value;
     if($("qe-secret").checked) q.secret = true;
     if($("qe-delegate").checked){ q.delegate = true; q.secret = true; }
@@ -959,7 +1162,7 @@ $("qe-save").onclick = function(){
 function editorDirty(){
   return !$("q-editor").classList.contains("hide") && editIdx===null && $("qe-title").value.trim() !== "";
 }
-["yesno","ranked","multi","text"].forEach(function(t){
+["yesno","ranked","score","multi","text"].forEach(function(t){
   $("q-add-"+t).onclick = function(){
     if(editorDirty() && !confirm("Discard the question you're currently adding?")) return;
     openEditor(t);
@@ -974,9 +1177,17 @@ $("b-apply-json").onclick = function(){
 Array.prototype.forEach.call(document.querySelectorAll("[data-preset]"), function(btn){
   btn.onclick = function(){
     var p = JSON.parse(JSON.stringify(PRESETS[btn.dataset.preset]));
-    p.key = p.key.replace("N", String(BQ.length+1));
-    BQ.push(p); editingLegacy = null;
-    msg("b-msg","","");
+    if(p._multi){
+      p.questions.forEach(function(q){ BQ.push(q); });
+      if(p.quota_groups) $("b-qgroups").value = JSON.stringify(p.quota_groups, null, 2);
+      msg("b-msg","okc","Loaded a multi-contest template with full-body quota groups. "+
+        "Review candidates + tags in each question, and the quota groups under Advanced.");
+    } else {
+      p.key = p.key.replace("N", String(BQ.length+1));
+      BQ.push(p);
+      msg("b-msg","","");
+    }
+    editingLegacy = null;
     renderQList();
   };
 });
@@ -1143,6 +1354,12 @@ function loadResults(live){
     var d = r.body, html = "<p class='kicker'>"+esc(d.name)+" · "+d.ballots_counted+" ballots counted</p>";
     if(d.live) html = "<div class='msg warn'><b>LIVE TALLY — NOT FINAL.</b> Voting may still be open; "+
       "numbers change as ballots arrive. This view is audit-logged.</div>" + html;
+    if(d.blank_ballots>0){
+      var pct=d.ballots_counted?Math.round(d.blank_ballots/d.ballots_counted*1000)/10:0;
+      html += "<div class='msg "+(pct>=3?"warn":"okc")+"'><b>"+d.blank_ballots+" fully-blank ballot(s)</b> ("+pct+
+        "%) — every question left empty/abstain. A normal share is small; a spike can signal a client glitch "+
+        "or bot submissions (the OpaVote empty-ballot pattern). Look them up under Void &amp; Reissue to inspect or void.</div>";
+    }
     d.questions.forEach(function(q){
       html += "<div class='provrow'><b>"+esc(q.title)+"</b>"+
         (q.secret ? " <span class='chip'>secret ballot</span>" : "")+"<div class='fields'>";
@@ -1164,9 +1381,31 @@ function loadResults(live){
           "<option value='irv'>Sequential IRV (SF-style RCV)</option>"+
           "<option value='approval'>Approval voting</option>"+
           "<option value='borda'>Borda count</option>"+
-          "<option value='meek'>Meek STV (NZ rules)</option></select> "+
+          "<option value='mntv'>MNTV / block plurality</option>"+
+          "<option value='meek'>Meek STV (NZ rules)</option>"+
+          "<optgroup label='Advanced (comparison only — not recommended)'>"+
+          "<option value='schulze'>Schulze / Condorcet</option>"+
+          "<option value='spav'>Sequential Proportional Approval (SPAV)</option>"+
+          "<option value='approval_stv'>Approval-STV threshold</option>"+
+          "</optgroup></select> "+
           "<button class='btn ghost sm' onclick=\"methodPreview('"+q.key+"')\">Recount preview under this method</button></div>"+
           "<div id='mpv-"+q.key+"'></div>";
+      } else if(q.type==="score"){
+        html += scoreBlock(q);
+        if(q.unconstrained){
+          var us = q.unconstrained;
+          html += "<div id='usv-"+q.key+"' style='display:none'><p class='kicker'>Comparison — quota requirements NOT applied (not the official result)</p>"+
+            "<b>Winners:</b> "+esc((us.winners||[]).join(", ")||"—")+
+            barChart(Object.keys(us.scores||{}).sort(function(a,b){return us.scores[b]-us.scores[a];})
+              .map(function(n){ return [n+(us.winners.indexOf(n)!==-1?" ✓":""), us.scores[n], us.winners.indexOf(n)!==-1?"f-elected":"f-cont"]; }))+"</div>";
+          html += "<button class='btn ghost sm' onclick=\"toggleScoreQuota('"+q.key+"')\" id='tsq-"+q.key+"'>Compare: without quota requirements</button>";
+        }
+        html += "<div style='margin-top:8px'><select id='smpm-"+q.key+"' style='width:auto;display:inline-block;padding:6px'>"+
+          "<option value='score'>Score (sum of ratings)</option>"+
+          "<option value='star'>STAR (runoff; multi = Bloc)</option>"+
+          "<option value='star_pr'>STAR-PR (proportional)</option></select> "+
+          "<button class='btn ghost sm' onclick=\"scoreMethodPreview('"+q.key+"')\">Recount preview under this method</button>"+
+          "<div id='smpv-"+q.key+"'></div></div>";
       } else if(q.type==="multi"){
         html += barChart(Object.keys(q.counts).map(function(n){ return [n, q.counts[n], "f-cont"]; }));
       } else if(q.type==="text"){
@@ -1179,7 +1418,7 @@ function loadResults(live){
 }
 function rankedBlock(q){
   var h = "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
-  if(q.alternates) h += "<br/><b>Alternates (two-count recount):</b> "+esc(q.alternates.join(", ")||"—");
+  if(q.alternates) h += "<br/><b>Alternates ("+(q.alternate_method==="replacement"?"replacement re-run":"expanded count")+"):</b> "+esc(q.alternates.join(", ")||"—");
   if(q.quota_group) h += "<br/><b>Quota group:</b> "+esc(q.quota_group)+" <small>(requirements span every contest in the group; tallies are body-wide)</small>";
   if(q.constraints && q.constraints.length){
     h += "<br/><b>Quota requirements:</b> " + q.constraints.map(function(cn){
@@ -1194,6 +1433,48 @@ function rankedBlock(q){
   h += stvChart(q);
   return h;
 }
+function scoreBlock(q){
+  var h = "<b>Elected"+(q.seats>1?" ("+q.seats+" seats)":"")+":</b> "+esc((q.winners||[]).join(", ")||"—");
+  if(q.quota_group) h += "<br/><b>Quota group:</b> "+esc(q.quota_group)+" <small>(requirements span every contest in the group)</small>";
+  if(q.constraints && q.constraints.length){
+    h += "<br/><b>Quota requirements:</b> " + q.constraints.map(function(cn){
+      var bound = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+      var okc = ("max" in cn) ? (cn.elected <= cn.max) : (cn.elected >= cn.min);
+      if(q.group_partial) return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected so far";
+      return esc(cn.label || (bound+" "+cn.tag))+" — "+cn.elected+" elected "+(okc ? "✓" : "✗ VIOLATED");
+    }).join(" · ");
+  }
+  h += "<br/><small>"+esc(q.method_used||"Score voting")+" · "+q.valid_ballots+" valid ballots · scores 0–"+(q.max_score||2)+"</small>";
+  var sc = q.scores||{}, tops = q.top_scores||{};
+  var rows = Object.keys(sc).sort(function(a,b){ return sc[b]-sc[a]; }).map(function(n){
+    var win = (q.winners||[]).indexOf(n)!==-1;
+    var lbl = n+(win?" ✓":"")+(tops[n]!==undefined?"  ("+tops[n]+" top)":"");
+    return [lbl, sc[n], win?"f-elected":"f-cont", win];
+  });
+  h += barChart(rows);
+  return h;
+}
+window.toggleScoreQuota = function(k){
+  var uv = $("usv-"+k), b = $("tsq-"+k);
+  var showU = uv.style.display === "none";
+  uv.style.display = showU ? "" : "none";
+  b.textContent = showU ? "Hide the without-quota comparison" : "Compare: without quota requirements";
+};
+window.scoreMethodPreview = function(k){
+  var pid = window.RESULTS_PID;
+  var m = $("smpm-"+k).value;
+  var body = {question: k, method: m};
+  if(!POLLS[pid].finalized) body.live = 1;
+  $("smpv-"+k).innerHTML = "<p><small>Counting as "+esc(m)+"…</small></p>";
+  api("/admin/api/polls/"+pid+"/recount_preview", {method:"POST", body: JSON.stringify(body)}).then(function(r){
+    if(r.status!==200){ $("smpv-"+k).innerHTML = "<div class='msg err'>"+esc(r.body.message||r.body.error||"Preview failed")+"</div>"; return; }
+    var d = r.body;
+    var rows = Object.keys(d.scores).sort(function(a,b){ return d.scores[b]-d.scores[a]; })
+      .map(function(n){ return [n+(d.winners.indexOf(n)!==-1?" ✓":""), d.scores[n], d.winners.indexOf(n)!==-1?"f-elected":"f-cont"]; });
+    $("smpv-"+k).innerHTML = "<div class='msg warn' style='margin-top:8px'><b>PREVIEW — not the official method.</b> "+esc(d.note||"")+
+      "<br/><b>Winners under this method:</b> "+esc(d.winners.join(", ")||"—")+"</div>"+barChart(rows);
+  });
+};
 window.methodPreview = function(k){
   var pid = window.RESULTS_PID, m = $("mp-"+k).value;
   var body = {question: k, method: m};

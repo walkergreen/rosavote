@@ -1,4 +1,6 @@
 <!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- SPDX-FileCopyrightText: 2026 Walker Green -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -615,6 +617,35 @@
     font-family: var(--font-ui); font-weight: 700; font-size: 0.72rem;
     color: var(--color-dsa); text-decoration: underline; text-underline-offset: 2px;
   }
+  /* ---- score / STAR voting ---- */
+  .vk-score { display: flex; flex-direction: column; gap: 8px; }
+  .vk-score-legend { display: flex; align-items: flex-end; gap: 10px; padding: 0 2px 2px; }
+  .vk-score-row {
+    display: flex; align-items: center; gap: 10px;
+    border: 2px solid var(--color-ink); background: #fff; padding: 8px 10px;
+  }
+  .vk-score-name {
+    flex: 1 1 auto; min-width: 0;
+    font-family: var(--font-ui); font-weight: 700; font-size: 0.95rem; line-height: 1.2;
+  }
+  .vk-score-name small { display: block; font-weight: 500; font-size: 0.72rem; color: rgba(0,0,0,0.6); }
+  .vk-score-cells { flex: none; display: flex; gap: 6px; }
+  .vk-score-h {
+    width: 44px; text-align: center;
+    font-family: var(--font-ui); font-weight: 800; font-size: 1rem; color: var(--color-ink);
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .vk-score-h small { font-weight: 600; font-size: 0.56rem; text-transform: uppercase; letter-spacing: .04em; color: rgba(0,0,0,0.55); }
+  .vk-score-b {
+    width: 44px; height: 44px; flex: none; cursor: pointer;
+    border: 2px solid var(--color-ink); background: #fff; color: var(--color-ink);
+    font-family: var(--font-ui); font-weight: 800; font-size: 1.15rem;
+  }
+  .vk-score-b.is-picked { background: var(--color-dsa); border-color: var(--color-dsa); color: var(--color-cream); box-shadow: 3px 3px 0 0 var(--color-ink); }
+  @media (max-width: 520px) {
+    .vk-score-b, .vk-score-h { width: 38px; }
+    .vk-score-b { height: 40px; }
+  }
   /* ---- ballot sections: three visually distinct voting categories ---- */
   .vk-sect {
     border: 1px solid var(--color-ink);
@@ -635,9 +666,31 @@
     font-size: 19px; font-weight: 800; color: transparent;
   }
   .vk-opt[aria-checked="true"] .vk-checkbox { color: var(--color-dsa); }
+  /* ---- accessibility: always-visible keyboard focus ---- */
+  a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible,
+  [role="radio"]:focus-visible, [role="checkbox"]:focus-visible, .vk-opt:focus-visible,
+  .vk-score-b:focus-visible {
+    outline: 3px solid #1a5fff; outline-offset: 2px; border-radius: 2px;
+  }
+  /* Windows High Contrast / forced-colors: keep controls + selection legible */
+  @media (forced-colors: active) {
+    .vk-opt, .vk-score-b, .vk-btn, .vk-checkbox, .vk-rankn { border: 2px solid ButtonText; }
+    .vk-opt.is-ranked, .vk-opt[aria-checked="true"], .vk-score-b.is-picked { outline: 3px solid Highlight; }
+  }
+  /* honor reduced-motion for the intro + confirmation animations */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+    #intro { display: none !important; }
+  }
 </style>
 </head>
 <body>
+<noscript><div style="background:#ffe1b2;border-bottom:2px solid #000;padding:14px 18px;font-family:Georgia,serif">
+  <b>This ballot needs JavaScript.</b> Please enable JavaScript, or open this link in a
+  different browser (Chrome, Safari, Firefox, or Edge) with no ballot-blocking extensions.
+  Still stuck? Email <a href="mailto:orgtools@dsausa.org">orgtools@dsausa.org</a> and your
+  chapter can help you vote.
+</div></noscript>
 <header class="vk-band"><div class="vk-band-inner"><div class="vk-wordmark">RosaVote<small>__CHAPTER_NAME__ &middot; Democratic Socialists of America</small></div><a class="vk-rose" href="/" style="border:none;padding:0;display:flex;" aria-label="RosaVote home"><img src="/logo.svg" alt="" width="34" height="34"/></a></div></header>
 <main>
 <div class="ballot-marks" style="height:7px; margin-top:4px;"></div>
@@ -653,6 +706,13 @@
         <button class="vk-btn" id="code-btn" type="button"><span class="vk-spin"></span> Open my ballot</button>
         <details class="vk-how"><summary>Can&rsquo;t find your code?</summary><ol>
           <li><b>Emailed / texted to you</b> as a tap-to-vote link. Check other inboxes and spam.</li>
+          <li><b>Resend my code:</b> enter the email or mobile number on your membership record and we'll re-send your link to your on-record contacts.
+            <div style="display:flex;gap:6px;margin:6px 0 2px;flex-wrap:wrap">
+              <input type="text" id="rs-contact" placeholder="you@email or 555-123-4567" style="flex:1;min-width:180px;padding:8px;border:2px solid var(--color-ink)"/>
+              <button type="button" class="vk-btn" id="rs-btn" style="min-height:auto;padding:8px 12px;flex:none">Resend</button>
+            </div>
+            <span id="rs-msg" style="font-size:.78rem;color:rgba(0,0,0,.65)" aria-live="polite"></span>
+          </li>
           <li><b>Mailed a postcard?</b> Your code is printed on it; scan the QR or type it above.</li>
           <li><b>Eligible but got no code?</b> <a href="#" id="prov-link" style="color:var(--color-dsa);font-weight:700;">Cast a provisional ballot</a> &mdash; sealed, counts once membership verifies you.</li>
           <li><b>Still stuck?</b> <a href="mailto:orgtools@dsausa.org?subject=__HELP_SUBJECT__" style="color:var(--color-dsa);font-weight:700;">Email orgtools@dsausa.org</a> &mdash; clicking the link pre-fills the subject with your chapter and the issue; just add your name and send.</li>
@@ -754,6 +814,9 @@
           <div class="vk-warn" id="done-warn" hidden style="text-align:left;"></div>
           <p class="vk-code-lbl" id="receipt-lbl">Your receipt code</p>
           <div class="vk-code" id="receipt-code" aria-live="polite" role="status"></div>
+          <p class="vk-fine"><a id="verify-link" href="/p/__POLL_ID__/verify-vote"
+          style="color:var(--color-dsa); font-weight:700;">Verify your vote &rarr;</a>
+          — confirm your ballot was recorded now, and independently check the full count after the election closes.</p>
           <p class="vk-fine" id="done-conf"></p>
           <p class="vk-fine">Save this code — it’s how election admins find your ballot if
           you ever need help. Individual votes are visible to election administrators only
@@ -796,6 +859,7 @@ var answers={};
 function resetAnswers(){for(var i=0;i<QDEF.length;i++){var q=QDEF[i];
  if(q.type==="yesno")answers[q.key]=null;
  else if(q.type==="ranked"||q.type==="multi")answers[q.key]=[];
+ else if(q.type==="score")answers[q.key]={};
  else if(q.type==="text"){answers[q.key]="";var t=$("txt-"+q.key);if(t)t.value="";}}
  syncOpts();}
 function api(p){return POLL_ID?("/p/"+POLL_ID+p):p;}
@@ -812,6 +876,14 @@ function submitCode(){var err=$("code-err");setErr(err,"");var val=($("in-code")
  .catch(function(){b.disabled=false;b.classList.remove("loading");setErr(err,"Network error. Please try again.");});}
 $("code-btn").addEventListener("click",submitCode);
 $("in-code").addEventListener("keydown",function(e){if(e.key==="Enter")submitCode();});
+(function(){var b=$("rs-btn");if(!b)return;
+ b.addEventListener("click",function(){var m=$("rs-msg"),v=($("rs-contact").value||"").trim();
+  if(v.length<3){m.textContent="Enter your on-record email or mobile number.";return;}
+  b.disabled=true;m.textContent="Sending…";
+  fetch(api("/resend"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contact:v})})
+   .then(function(){m.textContent="If that email or number matches a member, we've re-sent the ballot link to the contacts on file. Check your inbox/texts (and spam).";})
+   .catch(function(){m.textContent="Network error — please try again in a minute.";})
+   .then(function(){b.disabled=false;});});})();
 $("prov-link").addEventListener("click",function(e){e.preventDefault();show("scr-prov");});
 $("pv-back").addEventListener("click",function(){show("scr-code");});
 $("pv-continue").addEventListener("click",function(){var err=$("pv-err");setErr(err,"");
@@ -831,10 +903,24 @@ function ordinalHint(q){var el=$("hint-"+q.key);if(!el)return;
  if(answers[q.key][0]==="ABSTAIN"){el.textContent="Abstaining on this question.";return;}
  var parts=[];for(var i=0;i<answers[q.key].length;i++)parts.push((i+1)+". "+(q.names[answers[q.key][i]]||answers[q.key][i]));
  el.textContent=parts.join("  ·  ");}
+function scoreDone(q){var v=answers[q.key];if(v==="ABSTAIN")return true;
+ var n=v?Object.keys(v).length:0;return q.require_full?(n>=q.n_opts):(n>0);}
 function requiredMet(){for(var i=0;i<QDEF.length;i++){var q=QDEF[i];if(!q.required)continue;
  if(q.type==="yesno"&&!answers[q.key])return false;
- if(q.type==="ranked"&&!answers[q.key].length)return false;}
+ if(q.type==="ranked"&&!answers[q.key].length)return false;
+ if(q.type==="score"&&!scoreDone(q))return false;}
  return true;}
+function scoreHint(q){var el=$("hint-"+q.key);if(!el)return;var v=answers[q.key];
+ if(v==="ABSTAIN"){el.textContent="Abstaining on this question.";return;}
+ var n=v?Object.keys(v).length:0;
+ el.textContent=n?(n+" of "+q.n_opts+" candidates rated"+(q.require_full&&n<q.n_opts?" — rate every candidate":"")):"Rate every candidate.";}
+function syncScore(){var sg=document.querySelectorAll(".vk-score");
+ for(var g=0;g<sg.length;g++){var qk=sg[g].getAttribute("data-q"),v=answers[qk]||{};
+  var btns=sg[g].querySelectorAll(".vk-score-b");
+  for(var i=0;i<btns.length;i++){var c=btns[i].getAttribute("data-choice"),s=btns[i].getAttribute("data-score");
+   var picked=v!=="ABSTAIN"&&String(v[c])===s;
+   btns[i].classList.toggle("is-picked",picked);btns[i].setAttribute("aria-checked",String(picked));}
+  scoreHint(byKey[qk]);}}
 function syncOpts(){
  for(var g=0;g<groups.length;g++){
   var qk=groups[g].getAttribute("data-q"),type=groups[g].getAttribute("data-type");
@@ -852,6 +938,7 @@ function syncOpts(){
     btns[i].setAttribute("aria-label",pos===-1?nm:(c==="ABSTAIN"?nm+", selected":nm+", ranked "+(pos+1)+(over?" — beyond the seats; still counts toward alternates":"")));}}
   if(type==="single"&&!answers[qk]&&btns.length)btns[0].setAttribute("tabindex","0");}
  for(var j=0;j<QDEF.length;j++)if(QDEF[j].type==="ranked")ordinalHint(QDEF[j]);
+ syncScore();
  $("to-review").disabled=!requiredMet();}
 for(var g=0;g<groups.length;g++)(function(group){
  var qk=group.getAttribute("data-q"),type=group.getAttribute("data-type");
@@ -870,7 +957,20 @@ for(var g=0;g<groups.length;g++)(function(group){
    else if(k===" "||k==="Enter"){e.preventDefault();pick(idx);}});
  })(i);})(groups[g]);
 var clears=document.querySelectorAll(".vk-rank-clear");
-for(var ci=0;ci<clears.length;ci++)clears[ci].addEventListener("click",function(){answers[this.getAttribute("data-clear")]=[];syncOpts();});
+for(var ci=0;ci<clears.length;ci++)clears[ci].addEventListener("click",function(){
+ var k=this.getAttribute("data-clear");answers[k]=(byKey[k]&&byKey[k].type==="score")?{}:[];syncOpts();});
+/* ---- score / STAR rating handlers ---- */
+var scoreGroups=document.querySelectorAll(".vk-score");
+for(var sgi=0;sgi<scoreGroups.length;sgi++)(function(grp){
+ var qk=grp.getAttribute("data-q");
+ var btns=grp.querySelectorAll(".vk-score-b");
+ for(var i=0;i<btns.length;i++)(function(btn){
+  btn.addEventListener("click",function(){
+   var c=btn.getAttribute("data-choice"),s=parseInt(btn.getAttribute("data-score"),10);
+   if(answers[qk]==="ABSTAIN"||typeof answers[qk]!=="object"||!answers[qk])answers[qk]={};
+   answers[qk][c]=s;syncOpts();});
+ })(btns[i]);
+})(scoreGroups[sgi]);
 
 /* ---- review ---- */
 function rankedList(q){var v=answers[q.key];if(v[0]==="ABSTAIN")return"Abstain";
@@ -882,6 +982,12 @@ function reviewHTML(){var rows="";
   else if(q.type==="multi"){cls+=" is-text";var nm=[];
    for(var m=0;m<answers[q.key].length;m++)nm.push(q.names[answers[q.key][m]]||answers[q.key][m]);
    a=nm.length?esc(nm.join(", ")):"<em>— none —</em>";}
+  else if(q.type==="score"){cls+=" is-text";var v=answers[q.key];
+   if(v==="ABSTAIN")a="Abstain";
+   else{var nm=[];var ids=Object.keys(v||{});
+    ids.sort(function(x,y){return v[y]-v[x];});
+    for(var m=0;m<ids.length;m++)nm.push((q.names[ids[m]]||ids[m])+": "+v[ids[m]]);
+    a=nm.length?esc(nm.join("  ·  ")):"<em>— none —</em>";}}
   else if(q.type==="text"){cls+=" is-text";a=answers[q.key]?esc(answers[q.key]):"<em>— none —</em>";}
   rows+="<div class='vk-rev-row'><p class='vk-rev-q'>"+q.n+" · "+esc(q.title)+"</p><p class='"+cls+"'>"+a+"</p></div>";}
  return rows;}

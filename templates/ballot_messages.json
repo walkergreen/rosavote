@@ -1,0 +1,7 @@
+{
+  "_README": "Edit the wording below to change the ballot email + SMS members receive. NO code change or redeploy of the tools is needed — send_codes.py / resend.py read this file at send time. Keep the placeholders: emails use %recipient.link% (and optional %recipient.name%); the SMS uses {link} (and optional {name}). An env var (BALLOT_SUBJECT / BALLOT_EMAIL_TEXT / BALLOT_EMAIL_HTML / BALLOT_SMS_BODY) overrides the matching field here for a one-off send. Point BALLOT_TEMPLATES at a different file to swap the whole set (e.g. per language).",
+  "email_subject": "Your DSA ballot is ready — vote now",
+  "email_text": "Hello,\n\nYour ballot for the DSA election is ready. Vote securely here — this link is unique to you, do not share it:\n\n%recipient.link%\n\nVoting is quick and your ballot is confidential. If you have questions, contact your chapter's elections committee.\n\nIn solidarity,\nDSA Elections\n",
+  "email_html": "<p>Hello,</p><p>Your ballot for the DSA election is ready. <a href=\"%recipient.link%\">Vote securely here</a> — this link is unique to you, please don't share it.</p><p>Voting is quick and your ballot is confidential. Questions? Contact your chapter's elections committee.</p><p>In solidarity,<br>DSA Elections</p>",
+  "sms_body": "DSA Elections: your ballot is ready. Vote here (unique to you, don't share): {link}  Reply STOP to opt out."
+}
