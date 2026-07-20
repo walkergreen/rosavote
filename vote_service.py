@@ -1590,7 +1590,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
-      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/methods" style="color:var(--dsa);font-weight:700">voting methods</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a> &middot; <a href="/vs-opavote" style="color:var(--dsa);font-weight:700">RosaVote &amp; OpaVote</a>.</p>
+      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/methods" style="color:var(--dsa);font-weight:700">voting methods</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a> &middot; <a href="/vs-opavote" style="color:var(--dsa);font-weight:700">Why RosaVote</a>.</p>
       <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
       <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
       no credentials needed.</p>
@@ -1783,39 +1783,41 @@ SPLASH = """<!doctype html><html lang="en"><head>
       </details>
 
       <details>
-        <summary>How this compares to OpaVote</summary>
+        <summary>Why RosaVote is the preferred alternative</summary>
         <div class="dbody">
-        <p>OpaVote has been DSA's election platform for eight years &mdash; an affordable,
-        well-supported, fully hosted service that has run countless chapter and national
-        votes. It's an excellent choice, and this app isn't a replacement for it: it's a
-        <b>complementary, open-source, self-hosted option</b> for elections a chapter wants
-        to run on DSA's own infrastructure. Because both tools read and write the same
-        standard BLT ballot files, either can independently recount the other &mdash; there's
-        no lock-in either way. (See the fuller <a href="/vs-opavote">side-by-side</a>.)</p>
-        <p><b>Tabulation.</b> Effectively identical rules: OpaVote's Scottish STV descends
-        from OpenSTV, validated against eSTV &mdash; the same statute this app's shipped
-        tabulator implements. OpaVote gives you a polished, hosted results page with
-        per-round charts and a public recount link; here you generate results packages per
-        chapter with the expanded-count delegate/alternates method built in.</p>
-        <p><b>Hosting &amp; data.</b> OpaVote is fully hosted and supported, with nothing to
-        run. This app is self-hosted on DSA's own cloud: ballots stay on DSA infrastructure
-        and are retained on staff's terms, in exchange for staff owning the operational and
-        security burden (IAM, audit logs, hardening, an accountable administrator).</p>
-        <p><b>Built for DSA's ballots.</b> Because it's ours to shape, this app bakes in a
-        few DSA-specific needs: codes generated straight from the deduplicated membership
-        roll (no list uploads), per-section visibility rules (named poll votes beside a
-        secret delegate ballot on one page), diversity-quota reservations, the
-        expanded-count alternates rule, chapter-unique questions, and SMS/postcard delivery
-        tiers alongside email. OpaVote handles these around the tool; here they're
+        <p>OpaVote is a good partner to DSA &mdash; an affordable, dependable service that has
+        run our elections for years, and a solid choice, especially for high-stakes or
+        contested races where an independent third party adds trust. This app doesn't force a
+        migration off it; it's the <b>preferred alternative</b> for most elections:
+        <b>stronger, more flexible, more customizable, and more affordable</b>.
+        (See the fuller <a href="/vs-opavote">side-by-side</a>.)</p>
+        <p><b>More affordable at our scale.</b> OpaVote prices per voter, per election
+        (about $0.08/voter) &mdash; reasonable for one vote, but it multiplies across every
+        chapter running its own election. This app runs on cloud DSA already operates, so the
+        marginal cost of an election is a fraction of a vendor fee; message delivery
+        (SMS/postcards) is the main variable, and that's an add-on either way.</p>
+        <p><b>Built for DSA's ballots.</b> Because it's ours to shape, this app bakes in what
+        OpaVote can only handle by hand: codes generated straight from the deduplicated
+        membership roll (no list uploads), multi-section ballots with per-section visibility
+        (named poll votes beside a secret delegate ballot on one page), diversity-quota
+        reservations, Article&nbsp;V timing, the expanded-count alternates rule, chapter-unique
+        questions, and randomized slates. There they're workarounds; here they're
         configuration.</p>
-        <p><b>Cost.</b> Both are cost-conscious by design. OpaVote's nonprofit per-election
-        pricing is a big reason it fits DSA's dues-funded budget; this app runs on cloud DSA
-        already operates, so its main variable cost is message delivery (SMS/postcards),
-        which either approach would add separately.</p>
-        <p><b>Bottom line.</b> Two good options with different trade-offs: OpaVote for a
-        trusted, fully supported, zero-maintenance election; this app when a chapter wants
-        to self-host on DSA infrastructure, give members cryptographic ballot verification,
-        or use DSA-specific ballot features out of the box. Use whichever fits the race.</p>
+        <p><b>Verifiable and owned.</b> Same trusted Scottish STV math (OpaVote's descends
+        from OpenSTV; ours implements the same statute, reading the same BLT files), but this
+        app adds per-voter receipts and a public hash chain so members verify their own vote
+        and anyone can recount &mdash; and the code, the data, and the roadmap belong to DSA,
+        not a vendor. Ballots stay on DSA infrastructure instead of being deleted about 12
+        weeks after the election.</p>
+        <p><b>The trade.</b> DSA runs the infrastructure itself &mdash; IAM, audit logs,
+        hardening, an accountable administrator &mdash; where OpaVote hands you a fully hosted
+        service. That's real work, and it's the price of owning our own democratic
+        infrastructure. For most elections at our scale, it's worth it.</p>
+        <p><b>Not a forced migration.</b> OpaVote is a good partner, and no chapter has to leave
+        it. For an especially high-stakes or contested election, some will prefer the
+        independence of a neutral third-party vendor with commercial support &mdash; and OpaVote
+        stays an excellent choice there. RosaVote is the preferred default everywhere else,
+        ready whenever a chapter is.</p>
         </div>
       </details>
 
@@ -1838,19 +1840,18 @@ SPLASH = """<!doctype html><html lang="en"><head>
         members is a lighter load than a single packed hall. Using each tool for the
         job it's built for keeps both at their best: OpenSlides where the room is live,
         this app where the electorate is distributed.</p>
-        <p><b>Voting features.</b> OpenSlides is capable here too: it supports multi-day
-        polls and some ranked-choice voting, alongside its core strengths &mdash; motions,
-        amendments, quorum tracking, and projector-ready floor process this app doesn't
-        attempt. Where this app pulls ahead is <b>flexibility built for exactly this
-        election</b>: the Scottish STV <b>expanded-count alternates recount</b> as a built-in
-        rule, code-gated voting with no accounts or logins to provision for 120k members,
-        codes generated straight from the deduplicated membership roll, SMS and postcard
-        delivery tiers with reminder waves, self-serve provisional ballots, per-section
-        visibility (named poll votes beside a secret delegate ballot), chapter-unique
-        questions and local issues on one styled page, randomized candidate order per
-        voter, a free-form comment field, and per-chapter voting windows on a single
-        deployment. Each of those would be a customization project elsewhere; here
-        they're the design.</p>
+        <p><b>Voting features.</b> OpenSlides handles in-meeting voting &mdash; Yes/No/Abstain
+        and per-candidate (approval-style) polls, weighted and anonymous &mdash; alongside its
+        core strengths in motions, amendments, quorum tracking, and the projector-ready floor
+        process this app doesn't attempt. What it isn't built for today is <b>ranked-choice
+        STV elections</b> (its poll methods are Yes/No/Abstain variants; ranked STV isn't among
+        them yet) &mdash; and that's exactly this app's lane: Scottish &amp; Meek STV,
+        the expanded-count alternates recount, code-gated voting for 120k members with no
+        accounts to provision, codes generated straight from the deduplicated membership roll,
+        SMS and postcard delivery with reminder waves, self-serve provisional ballots,
+        per-section visibility (named poll votes beside a secret delegate ballot), chapter-unique
+        questions on one styled page, randomized candidate order, and per-chapter voting windows
+        on a single deployment. Different tools for different jobs.</p>
         <p><b>Cost &amp; ops.</b> Running a live assembly well takes real event
         engineering &mdash; hosting, load testing, venue network planning &mdash; because
         everything must work in the moment, in the room. Asynchronous voting is far more
@@ -1905,7 +1906,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>RosaVote</b> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">RosaVote &amp; OpaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){
   var intro = document.getElementById("intro");
@@ -4362,59 +4363,45 @@ def methods_page():
     return Response(_methods_html(), mimetype="text/html")
 
 
-# ---- RosaVote & OpaVote (DSA context) -----------------------------------
-# A respectful, DSA-specific comparison. OpaVote has been DSA's trusted
-# election platform for eight years; this page frames RosaVote as a
-# complementary open-source option, not a competitor — two tools with
-# different trade-offs that read the same standard ballot files.
+# ---- Why RosaVote (vs. OpaVote, DSA context) ----------------------------
+# OpaVote is a good partner to DSA; this page frames RosaVote as the
+# preferred alternative — stronger, more flexible, customizable, and more
+# affordable — WITHOUT forcing a migration. Some chapters will keep OpaVote
+# for high-stakes elections (an independent third party adds trust there).
 _VS_ROWS = [
-    ("Setup & hosting",
-     "Fully hosted and supported — nothing to run. DSA's trusted election "
-     "platform for eight years.",
-     "Self-hosted on DSA's own Google Cloud project; your team runs and "
-     "maintains it."),
-    ("Software model",
-     "A professionally built and maintained service, refined over years of "
-     "real elections.",
-     "Open source under AGPL-3.0 — the code is public, so anyone can read, "
-     "host, or extend it."),
-    ("Where ballots live",
-     "On OpaVote's hosted platform, purpose-built for running elections "
-     "securely.",
-     "In DSA's own cloud and data warehouse, so ballots stay on DSA "
-     "infrastructure."),
-    ("Cost",
-     "Nonprofit-friendly per-election pricing — a big reason it fits DSA's "
-     "dues-funded budget.",
-     "Runs on cloud DSA already operates, at minimal marginal cost."),
-    ("Counting methods",
-     "A broad, battle-tested menu — Scottish STV, Borda, IRV, approval, "
-     "Condorcet and more.",
-     "Scottish + Meek STV and Score/STAR/STAR-PR, plus the same comparison "
-     "methods (Borda, IRV, Condorcet, SPAV…)."),
-    ("Voter verification",
-     "Publishes results and, on request, a ballot file so counts can be "
-     "checked.",
-     "Adds a per-voter receipt, a public hash chain, and an in-browser "
-     "verifier for each voter."),
-    ("Independent recount",
-     "Exports standard .blt ballot files that any STV tool can re-run.",
-     "Publishes .blt files plus a tamper-evident hash chain and a bundled "
-     "verifier."),
+    ("Cost at DSA scale",
+     "About $0.08 per voter, per election — reasonable for years, but it "
+     "multiplies across 200+ chapters each running their own vote.",
+     "Runs on cloud DSA already operates — a fraction of the cost, at any "
+     "scale."),
+    ("Customization",
+     "One general-purpose ballot template.",
+     "Fully customizable: multi-section ballots, chapter-unique questions, "
+     "randomized slates, and per-section visibility on a single page."),
     ("DSA-specific rules",
-     "General-purpose; diversity quotas and bylaw timing are applied by the "
-     "operator around the tool.",
+     "Diversity quotas and bylaw timing are handled by hand, around the tool.",
      "Diversity-quota reservations, Article V timing, delegate alternates, and "
-     "scoped admin built in."),
-    ("Notifications",
-     "Handles ballot email delivery as part of the service.",
-     "Sends via Mailgun / Twilio / Scale to Win with a self-serve opt-out "
-     "page and bounce resend."),
-    ("Support & track record",
-     "Commercial support and eight years of proven use across DSA chapters and "
-     "national.",
-     "DSA-maintained and newer; support is in-house, best where staff are "
-     "comfortable with the cloud project."),
+     "national + chapter-scoped admin built in."),
+    ("Flexibility & control",
+     "Proprietary and hosted — you work within its limits.",
+     "Open source (AGPL-3.0) — DSA owns the roadmap and can extend anything."),
+    ("Data ownership",
+     "Ballots are hosted by the vendor and removed about 12 weeks after the "
+     "election.",
+     "Ballots stay on DSA infrastructure, retained on DSA's own terms."),
+    ("Voter verification",
+     "Published results and a downloadable ballot file.",
+     "Per-voter receipts, a public hash chain, and an in-browser verifier — "
+     "so members check their own vote and anyone can recount."),
+    ("Counting methods",
+     "Scottish STV, Borda, IRV, Condorcet — a solid, proven set.",
+     "All of those plus Meek STV and Score/STAR/STAR-PR — open and "
+     "reproducible, reading the same standard ballot files."),
+    ("Support & independence",
+     "Commercial support and a neutral, third-party platform — a real plus "
+     "for high-stakes or contested races.",
+     "DSA-maintained and extensible, with the whole movement able to "
+     "contribute."),
 ]
 
 
@@ -4425,42 +4412,39 @@ def _vs_opavote_html():
         f"<td class='rv' data-l='RosaVote'>{_esc(rv)}</td></tr>"
         for feat, op, rv in _VS_ROWS)
     body = (
-        "<p>OpaVote has been DSA's election platform for eight years — an "
-        "affordable, well-supported service that has run countless chapter and "
-        "national votes, and a natural fit for a democratic, dues-funded "
-        "organization. It remains an excellent choice, and RosaVote is not a "
-        "replacement for that partnership.</p>"
-        "<p>RosaVote is a <b>complementary, open-source option</b> for chapters "
-        "that want to self-host elections on DSA infrastructure, give members "
-        "cryptographic ballot verification, or use DSA-specific rules out of the "
-        "box. Because both tools read and write the same standard ballot files, "
-        "you're never locked in — a chapter can even run on one and independently "
-        "recount on the other.</p>"
+        "<p>OpaVote is a good partner to DSA — an affordable, dependable service "
+        "that has run our elections for years, and it stays a solid choice, "
+        "especially for high-stakes or contested races where an independent "
+        "third-party platform adds trust.</p>"
+        "<p><b>RosaVote is DSA's preferred alternative</b> going forward: stronger, "
+        "more flexible, fully customizable, and more affordable — open source, "
+        "built by DSA and for DSA. We're not forcing a migration. Chapters choose "
+        "what fits each race; RosaVote is simply the better default for most of "
+        "them.</p>"
         "<table class='vs'><thead><tr><th></th>"
         "<th>OpaVote</th><th class='rv'>RosaVote</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
-        "<h2>Where OpaVote shines</h2>"
-        "<ul><li>Proven and fully supported, with no infrastructure for you to "
-        "run.</li>"
-        "<li>Nonprofit pricing that fits a dues-funded budget.</li>"
-        "<li>Eight years of trust across DSA chapters and national, and a "
-        "polished results experience.</li>"
-        "<li>A mature, well-tested set of counting methods.</li></ul>"
-        "<h2>Where RosaVote can help</h2>"
-        "<ul><li>You want to self-host and keep ballots entirely on DSA "
-        "infrastructure.</li>"
-        "<li>You want members to verify their own ballot, and anyone to recount "
-        "from a public hash chain.</li>"
-        "<li>You need DSA-specific quotas, Article V timing, or scoped "
-        "chapter/national admin out of the box.</li>"
-        "<li>You want to build on or extend an open-source tool.</li></ul>"
-        "<p style='margin-top:14px'>The goal is to widen the options available to "
-        "the movement — more ways for members to govern themselves democratically "
-        "— not to replace a partnership that works well.</p>"
+        "<h2>What DSA gains</h2>"
+        "<ul><li><b>Lower cost.</b> Elections run for a fraction of per-chapter "
+        "vendor fees, on cloud DSA already pays for.</li>"
+        "<li><b>Ballots that fit our bylaws.</b> Quotas, Article V timing, "
+        "alternates and custom multi-section ballots — not workarounds bolted on "
+        "the side.</li>"
+        "<li><b>Real verifiability.</b> Members confirm their own vote and anyone "
+        "can independently recount from a public hash chain.</li>"
+        "<li><b>Ownership.</b> DSA controls the code, the data, and the roadmap — "
+        "and the whole movement can improve it.</li></ul>"
+        "<h2>When OpaVote still makes sense</h2>"
+        "<p>OpaVote is a good partner, and no chapter is being pushed off it. For "
+        "an especially high-stakes or contested election, some will prefer the "
+        "independence of a neutral, third-party vendor with commercial support — "
+        "and OpaVote remains an excellent choice for exactly that. RosaVote is the "
+        "preferred default everywhere else, and it's here whenever a chapter is "
+        "ready.</p>"
         "<p class='fine' style='margin-top:14px'>Not affiliated with or endorsed "
         "by OpaVote; OpaVote is a trademark of its owners. Descriptions here "
-        "reflect OpaVote's public documentation and its June 2026 DSA case study, "
-        "and corrections are welcome via the source repository.</p>")
+        "reflect OpaVote's public pricing/documentation and its June 2026 DSA case "
+        "study, and corrections are welcome via the source repository.</p>")
     extra = ("<style>table.vs{{border-collapse:collapse;width:100%;margin:8px 0 4px;"
              "font-size:.9rem}}table.vs th,table.vs td{{border:1px solid #000;"
              "padding:8px 10px;text-align:left;vertical-align:top}}"
@@ -4478,7 +4462,7 @@ def _vs_opavote_html():
              "display:block;font-size:.7rem;text-transform:uppercase;"
              "color:#dd1111;margin-bottom:2px}}}}</style>")
     return _LEGAL_SHELL.replace("</head>", extra + "</head>").format(
-        title="RosaVote & OpaVote", body=body)
+        title="Why RosaVote", body=body)
 
 
 @app.get("/vs-opavote")
