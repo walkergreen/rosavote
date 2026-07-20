@@ -393,7 +393,13 @@ def load_polls(force: bool = False) -> dict:
 
 
 def chapter_or_none(poll_id: str):
-    return load_polls().get(poll_id)
+    cfg = load_polls().get(poll_id)
+    if cfg is None:
+        # a just-created poll may not be in this instance's cached set yet
+        # (60s TTL, per-instance). One forced refresh closes the
+        # create-then-immediately-use race across Cloud Run instances.
+        cfg = load_polls(force=True).get(poll_id)
+    return cfg
 
 
 def poll_tz(cfg):
@@ -1067,7 +1073,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
       provisionals, void &amp; reissue, and view results &mdash; all in the
       browser console.</p>
       <a class="btn" style="background:#000" href="/admin/">Open the Admin Console &rarr;</a>
-      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a>.</p>
+      <p class="fine" style="margin-top:8px">Developers: RosaVote is API-first &mdash; see the <a href="/api" style="color:var(--dsa);font-weight:700">API reference</a> &middot; <a href="/accuracy" style="color:var(--dsa);font-weight:700">tabulation accuracy &amp; tests</a>.</p>
       <p class="fine" style="margin-top:8px">Just exploring? The console&rsquo;s sign-in page has a
       <b>one-tap demo sign-in</b> (scoped to the shared Demo Sandbox poll only) &mdash;
       no credentials needed.</p>
@@ -3269,6 +3275,95 @@ slowness, not failures, and never affect an in-progress vote.</p>
 @app.get("/api")
 def api_docs():
     return Response(_api_docs_html(), mimetype="text/html")
+
+
+# Verification results — regenerate the counts with tools/blt_regression.py and
+# tools/replay_election.py after any tabulator change; these are the last
+# recorded runs, shown on the public /accuracy page.
+ACCURACY = {
+    "opavote_anchor": {"election": "NPC At-Large 2025", "candidates": 37,
+                       "seats": 23, "ballots": 1279, "match": "23 / 23 winners"},
+    "regression": {"elections": 29, "ballots": 1623, "weighted_ballots": 1638,
+                   "errors": 0, "deterministic": True, "seats_filled": True},
+    "replay": {"election": "NLC Steering (19 candidates, 13 seats)", "ballots": 810,
+               "cast": "810 / 810", "throughput": "48–91 votes/sec (single client, "
+               "48 at 40 devices, 91 at 3,220 ballots / 100 devices)", "match": True},
+}
+
+
+def _accuracy_html():
+    a = ACCURACY
+    body = f"""
+<p style="font-size:.95rem"><b>How accurate is RosaVote at tabulating an election?</b>
+The counting engine is the shipped <code>stv_tabulate.py</code> (Scottish STV
+per SSI 2007/42; Meek STV per the New Zealand rules). Accuracy here means three
+separate things, each tested independently and each reproducible by you.</p>
+
+<h2>1 · Exact match against OpaVote</h2>
+<p>The strongest check: on the real <b>{a['opavote_anchor']['election']}</b>
+({a['opavote_anchor']['candidates']} candidates, {a['opavote_anchor']['seats']}
+seats, {a['opavote_anchor']['ballots']:,} ballots), RosaVote's Scottish STV count
+elects the <b>identical winner set</b> as OpaVote's certified count —
+<b>{a['opavote_anchor']['match']}</b>, quota and all. Because RosaVote reads and
+writes the same standard BLT ballot format, anyone can reproduce this: download
+the ballots, run them in OpaVote, OpenSTV, or this codebase's tabulator, and
+compare. Reproducibility, not a trust-us certificate, is the guarantee.</p>
+
+<h2>2 · Regression over {a['regression']['elections']} real elections</h2>
+<p>A corpus of {a['regression']['elections']} real YDSA, NCC, and chapter
+election ballot files — {a['regression']['ballots']:,} ballots
+({a['regression']['weighted_ballots']:,} weighted) — is counted on every build.
+These exercise the full variety of real-world BLT files: skipped rankings,
+overvotes, empty/abstain ballots, ballot weights above one, and races from 2 to
+20 candidates. Results:</p>
+<ul>
+<li><b>{a['regression']['errors']} parse or count errors</b> across all
+{a['regression']['elections']} files.</li>
+<li><b>Fully deterministic</b> — every election counts to the identical winner
+set on repeated runs (no hidden randomness in tabulation; candidate <i>display</i>
+order is shuffled per voter, but that never touches the count).</li>
+<li><b>Every seat filled</b> correctly for every contest.</li>
+</ul>
+<p>Scottish and Meek STV agree on most contests and legitimately differ on a few
+close ones — that's the two methods being genuinely different rules, not an
+error. Run it yourself: <code>python3 tools/blt_regression.py</code>.</p>
+
+<h2>3 · End-to-end replay from remote devices</h2>
+<p>Tabulating a file is one thing; proving the <i>live voting pipeline</i>
+records ballots faithfully is another. The replay harness casts an entire real
+election through the actual voting API — one voting code per ballot, POSTed
+concurrently from a pool of simulated remote devices — then reads the
+<b>stored</b> ballots back and counts them. On the
+<b>{a['replay']['election']}</b> election, {a['replay']['cast']} ballots were
+cast with <b>zero failures</b> (one-code-one-vote held under concurrency), and
+the result computed from stored ballots <b>matched a direct count of the source
+file exactly</b>. So the claim/validate/store/tabulate path introduces no error.
+Throughput measured {a['replay']['throughput']} — client-bound, since a real
+electorate is spread across thousands of devices and days rather than one test
+machine. Run it: <code>python3 tools/replay_election.py &lt;file.blt&gt; --base
+&lt;host&gt; --token …</code>.</p>
+
+<h2>What this does and doesn't prove</h2>
+<p><b>Proven:</b> the tabulator reproduces OpaVote's result on a real
+23-seat election; it counts a wide corpus of real ballots deterministically and
+without error; and the live vote pipeline stores ballots that tabulate to the
+same result. All of it is reproducible in software RosaVote doesn't control.</p>
+<p><b>Not claimed:</b> formal government certification (that program is for
+public-office systems and doesn't apply to an org's internal elections), nor a
+substitute for an independent security audit before a binding election. The
+honest, proportionate assurance for this use case is: open-source code + a
+reproducible recount + a tamper-evident hash chain over every ballot + these
+regression and replay tests. A losing candidate can recount every ballot
+themselves — which is a stronger guarantee than any closed certificate.</p>
+"""
+    return _LEGAL_SHELL.replace("<style>",
+        "<style>ul{{margin:6px 0 14px 20px}}li{{margin:0 0 5px}}").format(
+        title="Accuracy &amp; Verification", body=body)
+
+
+@app.get("/accuracy")
+def accuracy_page():
+    return Response(_accuracy_html(), mimetype="text/html")
 
 
 @app.get("/terms")

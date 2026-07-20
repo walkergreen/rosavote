@@ -26,6 +26,11 @@ python3 -c "import re; open('/tmp/t.js','w').write(re.search(r'<script>(.*)</scr
 # (this machine has no node — loading the page in a browser and checking the
 # console for errors is the fallback; same applies to admin_console.html)
 
+# tabulation accuracy: regression over real BLT election files + live replay:
+python3 tools/blt_regression.py            # 29 real elections, deterministic, 0 errors
+python3 tools/replay_election.py <f.blt> --base <host> --token $TOK  # cast via live API, verify
+# results surfaced on the /accuracy page.
+
 # seed Firestore config / mint scoped admin tokens (needs GCP creds):
 python3 tools/seed_config.py polls
 python3 tools/seed_config.py admin --name "NYC admins" --role chapter --polls debs_endorsement__nyc

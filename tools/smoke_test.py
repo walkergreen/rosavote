@@ -806,6 +806,26 @@ ok(c.post("/admin/api/polls/rf_test", headers=chi_hdr,
           json={"name": "x", "questions": RF_Q}).status_code == 403,
    "chapter token forbidden from the election builder (the {error:forbidden} case)")
 
+# ---- accuracy page + BLT regression sanity ----
+acc = c.get("/accuracy").data.decode()
+ok(c.get("/accuracy").status_code == 200 and "23 / 23" in acc and "{title}" not in acc,
+   "accuracy page renders with the OpaVote anchor")
+# run the regression harness inline (deterministic, no network)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+import blt_regression  # noqa: E402
+import glob as _glob
+_files = _glob.glob(os.path.join(blt_regression.FIX, "*.blt"))
+ok(len(_files) >= 20, "BLT fixtures present")
+_errs = 0
+for _f in _files:
+    try:
+        _r = blt_regression.run_one(_f)
+        if not _r["deterministic"] or not _r["seats_filled_ok"]:
+            _errs += 1
+    except Exception:
+        _errs += 1
+ok(_errs == 0, f"all {len(_files)} real BLT elections count deterministically without error")
+
 # ---- API docs page ----
 api_html = c.get("/api").data.decode()
 ok(c.get("/api").status_code == 200 and "API Reference" in api_html
