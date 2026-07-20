@@ -15,6 +15,11 @@
   .wm small{display:block;font-size:.92rem;font-weight:800;opacity:.88;letter-spacing:.02em;margin-top:2px}
   .rose{font-family:var(--disp);font-weight:900;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;border:2px solid var(--cream);padding:5px 8px 4px;text-align:center;line-height:1.05;flex:none;color:inherit;text-decoration:none;display:block}
   main{flex:1;width:100%;max-width:760px;margin:0 auto;padding:18px 14px 40px}
+  /* results/count panes break out of the 760px column so bars have room */
+  @media (min-width:820px){
+    #results-pane:not(.hide),#count-pane:not(.hide){width:min(1040px,94vw);
+      margin-left:50%;transform:translateX(-50%)}
+  }
   .marks{height:7px;background-image:repeating-linear-gradient(to right,#dd1111 0 7px,transparent 7px 18px);background-size:100% 7px;background-repeat:repeat-x}
   .card{background:#fff;border:1px solid var(--ink);box-shadow:6px 6px 0 0 var(--ink);margin-top:14px}
   .card-band{background:var(--dsa);color:#fff;padding:10px 14px;font-family:var(--disp);font-weight:800;text-transform:uppercase;font-size:1.35rem;display:flex;justify-content:space-between;align-items:center;gap:10px}
@@ -60,19 +65,37 @@
   .newcode{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:1.1rem;letter-spacing:.06em;background:var(--cream);border:1px dashed var(--ink);padding:6px 12px;display:inline-block;margin-top:8px}
   /* ---- results charts (palette CVD-validated: #dd1111 / #2a78d6 / #767676) ---- */
   /* OpaVote-style: full-width track, candidate name overlaid on the bar */
-  .rb-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.82rem}
-  .rb-track{flex:1;position:relative;height:30px;background:var(--cream);border:1px solid rgba(0,0,0,.25);
+  .rb-row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.85rem}
+  .rb-track{flex:1;position:relative;height:34px;background:var(--cream);border:1px solid rgba(0,0,0,.25);
     overflow:hidden;transition:box-shadow .12s,border-color .12s;cursor:default}
   .rb-track:hover{box-shadow:3px 3px 0 0 var(--ink);border-color:var(--ink)}
   .rb-track.hl{border-color:var(--dsa);box-shadow:3px 3px 0 0 var(--dsa)}
   .rb-fill{position:absolute;left:0;top:0;bottom:0;min-width:2px;transition:width .35s ease}
-  .rb-lbl{position:absolute;left:9px;top:0;bottom:0;display:flex;align-items:center;
-    font-weight:700;white-space:nowrap;z-index:1;text-shadow:0 0 2px var(--cream),0 0 2px var(--cream)}
+  /* name sits in a solid pill so neither the fill nor the quota line hurts legibility */
+  .rb-lbl{position:absolute;left:6px;top:50%;transform:translateY(-50%);display:inline-flex;
+    align-items:center;gap:5px;font-weight:700;white-space:nowrap;z-index:3;
+    padding:2px 7px;background:rgba(255,245,229,.86);border-radius:3px}
+  .rb-check{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
+    border-radius:50%;background:var(--dsa);color:#fff;font-size:11px;font-weight:900;flex:none}
+  .rb-x{color:#767676;font-weight:900}
   .f-elected{background:#f0a800}.f-cont{background:#8fb8ea}.f-muted{background:#c7c7c7}
-  .rb-track.win .rb-fill{background:#dd1111}.rb-track.win .rb-lbl{color:#fff5e5;text-shadow:none}
-  .rb-val{flex:0 0 96px;font-variant-numeric:tabular-nums;font-size:.78rem}
-  .rb-val b{font-size:.85rem}
-  .rb-quota{position:absolute;top:-2px;bottom:-2px;width:0;border-left:2px dashed #000;z-index:2}
+  .rb-track.win .rb-fill{background:#dd1111}
+  .rb-track.win .rb-lbl{background:rgba(255,245,229,.92)}
+  .rb-val{flex:0 0 96px;font-variant-numeric:tabular-nums;font-size:.8rem}
+  .rb-val b{font-size:.88rem}
+  /* quota line sits BEHIND the name pill (z-index 3), dimmer so it never obscures text */
+  .rb-quota{position:absolute;top:-2px;bottom:-2px;width:0;border-left:2px dashed rgba(0,0,0,.55);z-index:2}
+  /* i-in-circle info button + click popover */
+  .info-i{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;
+    border-radius:50%;border:1.5px solid var(--dsa);color:var(--dsa);background:#fff;
+    font:italic 700 11px Georgia,serif;cursor:pointer;vertical-align:middle;margin-left:5px;padding:0;flex:none}
+  .info-i:hover{background:var(--dsa);color:#fff}
+  .info-pop{position:fixed;z-index:200;max-width:320px;background:#fff;border:1px solid var(--ink);
+    box-shadow:5px 5px 0 0 var(--ink);padding:12px 14px;font-family:var(--ui);font-size:.82rem;
+    line-height:1.5;color:var(--ink)}
+  .info-pop h4{font-family:var(--disp);font-size:1rem;text-transform:uppercase;margin:0 0 6px;color:var(--dsa)}
+  .info-pop .x{float:right;cursor:pointer;font-weight:700;color:rgba(0,0,0,.5);margin:-4px -4px 0 8px}
+  .info-back{position:fixed;inset:0;z-index:199}
   .stagecard{border:1px solid rgba(0,0,0,.25);padding:8px 10px;margin:8px 0;background:#fff}
   .stagehead{font-weight:700;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:var(--dsa)}
   .chart-legend{font-size:.72rem;margin:6px 0 2px;color:rgba(0,0,0,.7)}
@@ -204,14 +227,19 @@
     <div class="card hide" id="builder-pane">
       <div class="card-band">Election Builder</div>
       <div class="card-body">
+        <div id="b-gate" class="msg warn hide">The election builder is for
+        <b>national admins</b>. You're signed in as a chapter admin, so you can
+        run your chapter's existing polls (Voters, Results, Provisionals, Void)
+        but not create or edit election configs. Ask a national admin to build
+        the election, or sign in with a national token.</div>
         <p class="kicker">National admins only</p>
-        <p>Art. V §5 is enforced on save: with a convention date set, the whole
-        voting window must fall between 4 months and 45 days before it, and
-        apportionment must be confirmed done.</p>
-        <label>Poll ID <small>(lowercase; new ID creates a poll)</small></label>
-        <input type="text" id="b-pid" placeholder="spring_referendum__nyc"/>
+        <p>Art. V §5 applies <b>only to National Convention delegate elections</b>
+        — mark a ranked question as a delegate election to enforce it. Ordinary
+        referendums and chapter officer elections have no window restrictions.</p>
         <label>Chapter / election display name</label>
-        <input type="text" id="b-name"/>
+        <input type="text" id="b-name" placeholder="Spring Referendum — NYC"/>
+        <label>Poll ID <small>(lowercase; the URL id — auto-filled from the name, edit if needed)</small></label>
+        <input type="text" id="b-pid" placeholder="spring_referendum__nyc"/>
         <label>Timezone (windows below are entered in this timezone)</label>
         <select id="b-tz">
           <option value="America/New_York">Eastern — America/New_York</option>
@@ -234,8 +262,9 @@
           <div><label style="margin-bottom:14px">Apportionment done</label>
             <input type="checkbox" id="b-app" style="width:22px;height:22px"/></div>
         </div>
-        <label>Test code (optional, repeatable, never recorded)</label>
-        <input type="text" id="b-test"/>
+        <label>Test code <small>(optional, repeatable, never recorded)</small></label>
+        <div class="row"><div><input type="text" id="b-test" placeholder="TEST-…"/></div>
+          <button class="btn ghost sm" id="b-test-suggest" type="button">Suggest</button></div>
         <label>Ballot questions</label>
         <div id="q-list"><p><small>No questions yet — add one below or use a template.</small></p></div>
         <div class="row" style="margin:0 0 4px">
@@ -271,17 +300,30 @@
                 <option value="meek">Meek STV (YDSA delegates)</option></select></div>
             </div>
             <div class="row" style="margin-top:8px">
-              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/></div>
-              <div><label style="display:inline">Delegate election (Art. V) </label><input type="checkbox" id="qe-delegate" style="width:18px;height:18px"/></div>
+              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
+              <div><label style="display:inline">Delegate election (Art. V) </label><input type="checkbox" id="qe-delegate" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="delegate" aria-label="Delegate election">i</button></div>
               <div><label style="display:inline">Shuffle order per voter </label><input type="checkbox" id="qe-shuffle" style="width:18px;height:18px" checked/></div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div><label style="display:inline">Require a complete ranking </label><input type="checkbox" id="qe-fullvote" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="fullvote" aria-label="Require complete ranking">i</button></div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div><label style="display:inline">Quota requirements (diversity)</label>
+                <input type="checkbox" id="qe-quota" style="width:18px;height:18px"/></div>
+            </div>
+            <div id="qe-quotawrap" style="display:none">
+              <label>Constraints — one per line: <code>tag max N</code> or <code>tag min N | Label</code></label>
+              <textarea id="qe-constraints" style="min-height:56px" placeholder="cis_man max 13 | No more than 13 cis men&#10;marginalized min 8 | At least 8 nationally marginalized members"></textarea>
+              <p style="font-size:.72rem;margin:4px 0 0">Candidate attribute tags below become required once quotas are on.</p>
             </div>
           </div>
           <div id="qe-optwrap">
             <label id="qe-optlabel">Candidates / options</label>
             <div id="qe-opts"></div>
             <button class="btn ghost sm" id="qe-addopt" type="button">＋ Add option</button>
-            <p style="font-size:.72rem;margin:4px 0 0" id="qe-taghint">Attribute tags (comma-separated, e.g.
-            <code>cis_man, white</code>) matter only for quota-constrained elections — leave blank otherwise.</p>
+            <p style="font-size:.72rem;margin:4px 0 0;display:none" id="qe-taghint">Attribute tags
+            (comma-separated, e.g. <code>cis_man, white</code>) drive the quota requirements above.
+            A candidate with no matching category gets an empty tag list.</p>
           </div>
           <div id="qe-textwrap">
             <label>Character limit</label>
@@ -310,8 +352,9 @@
       <div class="card-band">Results</div>
       <div class="card-body">
         <p>Results unlock when a poll is <b>finalized</b> (automatic ~15 minutes
-        after close). Ranked contests are counted here by the shipped Scottish
-        STV tabulator — delegate contests include the alternates recount.
+        after close)<button type="button" class="info-i" data-info="finalize" aria-label="Why 15 minutes?">i</button>.
+        Ranked contests are counted here by the shipped Scottish
+        STV tabulator — delegate contests include the alternates recount<button type="button" class="info-i" data-info="twocount" aria-label="Two-count method">i</button>.
         Free-text answers are counted, never displayed. National sees every
         poll; chapter tokens see their own.</p>
         <div id="results-overview"></div>
@@ -326,7 +369,7 @@
         <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
         <p class="kicker">Ballots — export &amp; independent verification</p>
         <p>Download each contest as a standard <b>.blt</b> file
-        <a href="#" class="blt-info" title="What is a BLT file?">ℹ️</a> (ballot weights
+        <button type="button" class="info-i blt-info" title="What is a BLT file?" aria-label="What is a BLT file?">i</button> (ballot weights
         included) and reproduce the result in software we don't control:</p>
         <div id="blt-list"><p><small>Pick a poll above, then</small></p></div>
         <div class="row">
@@ -370,7 +413,7 @@
     <div class="card hide" id="count-pane">
       <div class="card-band">Count Workbench</div>
       <div class="card-body">
-        <p>Load any <b>.blt</b> file <a href="#" class="blt-info" title="What is a BLT file?">ℹ️</a>
+        <p>Load any <b>.blt</b> file <button type="button" class="info-i blt-info" title="What is a BLT file?" aria-label="What is a BLT file?">i</button>
         (e.g. one exported from the Results tab, or
         from another system), run a Scottish STV count, and see the same
         round-by-round chart. The ballot text is editable — tweak ballots,
@@ -469,6 +512,64 @@ var TOKEN = sessionStorage.getItem("admin_token") || "";
 var POLLS = {};
 function $(id){ return document.getElementById(id); }
 function esc(s){ var d=document.createElement("div"); d.textContent=String(s==null?"":s); return d.innerHTML; }
+// ---- reusable "i" info popovers ----
+var INFO = {
+  finalize: ["Why results wait ~15 minutes after close",
+    "Voting closes exactly at the scheduled time, but results are certified a step later. "+
+    "A scheduled job sweeps every 15 minutes and <b>finalizes</b> each poll whose window has "+
+    "passed — freezing the ballot record, snapshotting counts, and unlocking the public "+
+    "results page. The delay isn't computation (tallies take milliseconds); it's a deliberate "+
+    "buffer so late-arriving or in-flight ballots settle and an administrator can adjudicate "+
+    "any pending provisionals before the count is called final. National admins can view a "+
+    "live (uncertified) tally at any time."],
+  twocount: ["Two-count method for alternates",
+    "Delegates and alternates are decided from the <b>same ballots</b> in two passes. "+
+    "Count 1 runs Scottish STV for the delegate seats — its winners are the delegates. "+
+    "Count 2 re-runs the identical ballots with seats set to delegates + alternates; anyone "+
+    "elected in that larger count who is <i>not</i> already a delegate becomes an alternate, "+
+    "in order of election. This is more principled than taking 'next highest' from a stopped "+
+    "count, and both passes are reproducible from the published BLT."],
+  secret: ["Secret ballot",
+    "A secret-ballot question is stored in a separate collection with <b>no member name and "+
+    "no chapter</b> attached — only a random receipt and a code hash for troubleshooting. "+
+    "Election administrators can access it solely to trace a specific ballot under audit; "+
+    "chapters never see it, and it is never published by name. Convention delegate elections "+
+    "must be secret ballots (Const. Art. V §5)."],
+  delegate: ["Delegate election (Art. V)",
+    "Marking a ranked question as a <b>delegate election</b> applies the DSA Constitution's "+
+    "Art. V §5 rules: it is enforced as a secret ballot, and — when a convention date is set "+
+    "— the whole voting window must fall between 4 months and 45 days before the convention, "+
+    "with apportionment confirmed first. Use this only for National Convention delegate "+
+    "elections; ordinary chapter officer elections don't need it."],
+  fullvote: ["Require a complete ranking",
+    "When on, a voter must rank <b>every</b> candidate for their ballot to be accepted "+
+    "(no partial rankings, no early stop). <b>Use it</b> for small slates where a full "+
+    "preference order is expected and exhausted ballots would distort the count. "+
+    "<b>Avoid it</b> for large fields (e.g. a 37-candidate at-large race) — forcing voters "+
+    "to rank everyone causes drop-off and donkey-voting, and Scottish/Meek STV already handle "+
+    "partial rankings correctly by exhausting a ballot only once its choices run out."],
+};
+var _pop, _back;
+function closeInfo(){ if(_pop){_pop.remove();_pop=null;} if(_back){_back.remove();_back=null;} }
+function openInfo(key, anchor){
+  closeInfo();
+  var d = INFO[key]; if(!d) return;
+  _back = document.createElement("div"); _back.className="info-back"; _back.onclick=closeInfo;
+  document.body.appendChild(_back);
+  _pop = document.createElement("div"); _pop.className="info-pop";
+  _pop.innerHTML = "<span class='x' aria-label='close'>✕</span><h4>"+esc(d[0])+"</h4><p>"+d[1]+"</p>";
+  _pop.querySelector(".x").onclick = closeInfo;
+  document.body.appendChild(_pop);
+  var r = anchor.getBoundingClientRect(), pw = _pop.offsetWidth, ph = _pop.offsetHeight;
+  var top = r.bottom + 8; if(top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 8);
+  var left = Math.min(Math.max(8, r.left), window.innerWidth - pw - 8);
+  _pop.style.top = top+"px"; _pop.style.left = left+"px";
+}
+function infoIcon(key){ return "<button type='button' class='info-i' data-info='"+key+"' aria-label='More info'>i</button>"; }
+document.addEventListener("click", function(e){
+  var b = e.target.closest && e.target.closest(".info-i");
+  if(b){ e.preventDefault(); openInfo(b.getAttribute("data-info"), b); }
+});
 function msg(id, cls, text){ $(id).innerHTML = text ? '<div class="msg '+cls+'">'+esc(text)+"</div>" : ""; }
 function api(path, opts){
   opts = opts || {};
@@ -505,6 +606,13 @@ function boot(){
     $("console").classList.remove("hide");
     $("whoami-line").innerHTML = "<b>"+esc(r.body.name)+"</b> &middot; "+esc(r.body.role)+
       (r.body.role==="chapter" ? " &middot; "+esc((r.body.polls||[]).join(", ")) : "");
+    var national = r.body.role === "national";
+    // election building is national-only — hide the builder + create buttons for chapter admins
+    document.querySelector('[data-pane="builder-pane"]').style.display = national ? "" : "none";
+    $("new-election-btn").style.display = national ? "" : "none";
+    $("b-gate").classList.toggle("hide", national);
+    Array.prototype.forEach.call(document.querySelectorAll("#builder-pane .card-body > :not(#b-gate)"),
+      function(el){ el.style.display = national ? "" : "none"; });
     loadPolls();
   });
 }
@@ -621,10 +729,24 @@ $("new-election-btn").onclick = function(){
   document.querySelector('[data-pane="builder-pane"]').click();
   ["b-pid","b-name","b-opens","b-closes","b-conv","b-test","b-questions","b-qgroups"].forEach(function(id){ $(id).value=""; });
   BQ = []; $("q-editor").classList.add("hide"); editIdx = null; renderQList();
+  pidEdited = false;
   $("b-tz").value = "America/New_York"; $("b-app").checked = false;
   editingLegacy = null; msg("b-msg","","");
   syncArt5();
   $("b-pid").focus();
+};
+var pidEdited = false;
+function suggestPid(name){
+  return String(name||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,60);
+}
+$("b-pid").addEventListener("input", function(){ pidEdited = $("b-pid").value.trim() !== ""; });
+$("b-name").addEventListener("input", function(){
+  if(!pidEdited) $("b-pid").value = suggestPid($("b-name").value);
+});
+$("b-test-suggest").onclick = function(){
+  var slug = (suggestPid($("b-name").value) || "poll").toUpperCase().replace(/_/g,"-").slice(0,20).replace(/-+$/,"");
+  var rand = Math.random().toString(36).slice(2,6).toUpperCase();
+  $("b-test").value = ("TEST-"+slug+"-"+rand).replace(/-+/g,"-");
 };
 $("new-count-btn").onclick = function(){
   document.querySelector('[data-pane="count-pane"]').click();
@@ -635,7 +757,7 @@ $("new-count-btn").onclick = function(){
 var editingLegacy = null;   // legacy q6/q8/q7 of the poll being edited (passthrough)
 function fillBuilder(pid, c){
   document.querySelector('[data-pane="builder-pane"]').click();
-  $("b-pid").value = pid; $("b-name").value = c.name || "";
+  $("b-pid").value = pid; $("b-name").value = c.name || ""; pidEdited = true;
   var tzv = c.timezone || "America/New_York";
   if(!Array.prototype.some.call($("b-tz").options, function(o){ return o.value===tzv; })){
     var op = document.createElement("option"); op.value=tzv; op.textContent=tzv; $("b-tz").appendChild(op);
@@ -731,7 +853,7 @@ function addOptRow(o){
   var row = document.createElement("div"); row.className = "optrow";
   row.innerHTML = "<input type='text' class='o-name' placeholder='Name' value='"+esc(o.name||"")+"'/>"+
     "<input type='text' class='o-sub' placeholder='Subtitle (optional)' value='"+esc(o.sub||"")+"'/>"+
-    "<input type='text' class='o-tags' placeholder='Tags (optional)' value='"+esc((o.tags||[]).join(", "))+"'/>";
+    "<input type='text' class='o-tags' placeholder='Attribute tags' style='display:none' value='"+esc((o.tags||[]).join(", "))+"'/>";
   var x = document.createElement("button"); x.className = "btn ghost sm"; x.textContent = "✕"; x.type = "button";
   x.onclick = function(){ row.remove(); };
   row.appendChild(x);
@@ -753,7 +875,16 @@ function openEditor(type, idx){
     $("qe-method").value = q.method||"scottish";
     $("qe-secret").checked = !!q.secret; $("qe-delegate").checked = !!q.delegate;
     $("qe-shuffle").checked = q.shuffle!==false;
+    $("qe-fullvote").checked = !!q.require_full;
+    $("qe-quota").checked = !!(q.constraints && q.constraints.length);
+    $("qe-constraints").value = (q.constraints||[]).map(function(cn){
+      var b = ("max" in cn) ? ("max "+cn.max) : ("min "+cn.min);
+      return cn.tag+" "+b+(cn.label ? " | "+cn.label : "");
+    }).join("\n");
   }
+  // quota + tags belong to ranked only, and only when quotas are enabled
+  $("qe-quota").parentNode.style.display = type==="ranked" ? "" : "none";
+  syncQuotaUI();
   if(type==="text") $("qe-max").value = q.max||1000;
   $("qe-opts").innerHTML = "";
   ((q.options)||[]).forEach(addOptRow);
@@ -762,7 +893,15 @@ function openEditor(type, idx){
   $("q-editor").classList.remove("hide");
   $("qe-title").focus();
 }
-$("qe-addopt").onclick = function(){ addOptRow(); };
+function syncQuotaUI(){
+  var type = $("q-editor").dataset.qtype;
+  var on = type==="ranked" && $("qe-quota").checked;
+  $("qe-quotawrap").style.display = on ? "" : "none";
+  $("qe-taghint").style.display = on ? "" : "none";
+  document.querySelectorAll("#qe-opts .o-tags").forEach(function(i){ i.style.display = on ? "" : "none"; });
+}
+$("qe-quota").addEventListener("change", syncQuotaUI);
+$("qe-addopt").onclick = function(){ addOptRow(); syncQuotaUI(); };
 $("qe-cancel").onclick = function(){ $("q-editor").classList.add("hide"); editIdx = null; };
 $("qe-save").onclick = function(){
   var type = $("q-editor").dataset.qtype;
@@ -781,9 +920,10 @@ $("qe-save").onclick = function(){
       taken.push(id);
       var o = {id: id, name: name};
       var sub = row.querySelector(".o-sub").value.trim(); if(sub) o.sub = sub;
-      var tags = row.querySelector(".o-tags").value.trim();
-      if(tags) o.tags = tags.split(",").map(function(t){ return t.trim(); }).filter(Boolean);
-      else if(row.querySelector(".o-tags").value !== "" || (editIdx!==null && (BQ[editIdx].constraints||BQ[editIdx].quota_group))) o.tags = [];
+      if(type==="ranked" && $("qe-quota").checked){
+        var tags = row.querySelector(".o-tags").value.trim();
+        o.tags = tags ? tags.split(",").map(function(t){ return t.trim(); }).filter(Boolean) : [];
+      }
       opts.push(o);
     });
     if(!opts.length){ alert("Add at least one "+(type==="ranked"?"candidate":"option")+"."); return; }
@@ -796,7 +936,19 @@ $("qe-save").onclick = function(){
     if($("qe-secret").checked) q.secret = true;
     if($("qe-delegate").checked){ q.delegate = true; q.secret = true; }
     q.shuffle = $("qe-shuffle").checked;
-    if(editIdx!==null && BQ[editIdx].constraints) q.constraints = BQ[editIdx].constraints;
+    if($("qe-fullvote").checked) q.require_full = true;
+    if($("qe-quota").checked){
+      var cons = $("qe-constraints").value.split("\n").map(function(line){
+        line = line.trim(); if(!line) return null;
+        var label = ""; var bar = line.indexOf("|");
+        if(bar>=0){ label = line.slice(bar+1).trim(); line = line.slice(0,bar).trim(); }
+        var m = line.match(/^(\S+)\s+(max|min)\s+(\d+)$/i);
+        if(!m) return null;
+        var c = {tag:m[1].toLowerCase().replace(/\s+/g,"_")}; c[m[2].toLowerCase()] = parseInt(m[3],10);
+        if(label) c.label = label; return c;
+      }).filter(Boolean);
+      if(cons.length) q.constraints = cons;
+    }
     if(editIdx!==null && BQ[editIdx].quota_group) q.quota_group = BQ[editIdx].quota_group;
   }
   if(type==="text") q.max = parseInt($("qe-max").value,10)||1000;
@@ -804,8 +956,14 @@ $("qe-save").onclick = function(){
   $("q-editor").classList.add("hide"); editIdx = null; editingLegacy = null;
   renderQList();
 };
+function editorDirty(){
+  return !$("q-editor").classList.contains("hide") && editIdx===null && $("qe-title").value.trim() !== "";
+}
 ["yesno","ranked","multi","text"].forEach(function(t){
-  $("q-add-"+t).onclick = function(){ openEditor(t); };
+  $("q-add-"+t).onclick = function(){
+    if(editorDirty() && !confirm("Discard the question you're currently adding?")) return;
+    openEditor(t);
+  };
 });
 $("b-apply-json").onclick = function(){
   var t = $("b-questions").value.trim();
@@ -1099,7 +1257,8 @@ function stvChart(q){
       var val = out ? 0 : v;
       var pct = Math.round(val/scaleMax*1000)/10;
       var cls = status==="elected" ? "f-elected" : status==="excluded"||out ? "f-muted" : "f-cont";
-      var mark = status==="elected" ? " ✓" : (status==="excluded"||out) ? " ✗" : "";
+      var mark = status==="elected" ? "<span class='rb-check'>✓</span>"
+               : (status==="excluded"||out) ? "<span class='rb-x'>✕</span>" : "";
       var win = status==="elected";
       var delta = "";
       if(prev && !out && prev.totals[cand] != null){
@@ -1110,7 +1269,7 @@ function stvChart(q){
         "<span class='rb-track"+(win?" win":"")+"' title='"+esc(cand)+": "+(out?"excluded":val)+"'>"+
           (out?"":"<span class='rb-fill "+cls+"' style='width:"+pct+"%'></span>")+
           "<span class='rb-quota' style='left:"+qpct+"%'></span>"+
-          "<span class='rb-lbl'>"+esc(cand)+mark+"</span>"+
+          "<span class='rb-lbl'>"+esc(cand)+mark+"</span>"+  // mark = badge span
         "</span><span class='rb-val'>"+(out?"<small>out</small>":"<b>"+(Math.round(v*100)/100)+"</b>"+delta)+"</span></div>";
     });
     if(st.nontransferable) html += "<div class='rb-row'>"+

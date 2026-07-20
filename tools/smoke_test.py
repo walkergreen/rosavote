@@ -790,4 +790,20 @@ ok("connect-src 'self'" in hdrs.get("Content-Security-Policy", ""),
 ok(hdrs.get("X-Content-Type-Options") == "nosniff" and
    hdrs.get("X-Frame-Options") == "DENY", "security headers present")
 
+# ---- require-full-ranking + chapter forbidden on builder ----
+RF_Q = [{"key": "rank3", "type": "ranked", "title": "Rank all three", "seats": 1,
+         "require_full": True,
+         "options": [{"id": "A1", "name": "A"}, {"id": "B2", "name": "B"}, {"id": "C3", "name": "C"}]}]
+ok(c.post("/admin/api/polls/rf_test", headers=hdr,
+          json={"name": "RF Test", "questions": RF_Q}).status_code == 200,
+   "require_full poll saves")
+ok(c.post("/p/rf_test/vote", json={"code": "R" * 16, "answers": {"rank3": ["A1"]}}).status_code == 400,
+   "partial ranking rejected when full ranking required")
+ok(c.post("/p/rf_test/vote", json={"code": "R" * 16,
+          "answers": {"rank3": ["A1", "B2", "C3"]}}).status_code == 200,
+   "complete ranking accepted")
+ok(c.post("/admin/api/polls/rf_test", headers=chi_hdr,
+          json={"name": "x", "questions": RF_Q}).status_code == 403,
+   "chapter token forbidden from the election builder (the {error:forbidden} case)")
+
 print(f"SMOKE TEST: all {passed} checks passed")

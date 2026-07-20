@@ -230,6 +230,8 @@ def validate_answers(data, cfg) -> tuple[dict, dict]:
             v = [str(x).upper() for x in v]
             if v != ["ABSTAIN"] and (len(set(v)) != len(v) or not set(v) <= ids):
                 raise ValueError(key)
+            if q.get("require_full") and v != ["ABSTAIN"] and len(v) != len(ids):
+                raise ValueError(key)      # complete-ranking enforced
             answers[key] = v
         elif typ == "multi":
             v = v or []
@@ -1618,6 +1620,8 @@ def _validate_questions(qs, errors, warnings):
                 return max(v, minimum)
             nq["seats"] = _n("seats", 1, 1)
             nq["alternates"] = _n("alternates", 0, 0)
+            if q.get("require_full"):
+                nq["require_full"] = True
             method = str(q.get("method") or "scottish").strip().lower()
             if method not in ("scottish", "meek"):
                 errors.append(f"question {key!r}: method must be scottish or meek")
@@ -2216,7 +2220,8 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
     return {"poll_id": poll_id, "name": cfg.get("name"),
             "finalized_at": cfg.get("finalized_at"),
             "final_counts": cfg.get("final_counts"),
-            "ballots_counted": len(main_rows), "weighted": weighted,
+            # secret-ballot-only polls keep their ballots in the secret collection
+            "ballots_counted": max(len(main_rows), len(secret_rows)), "weighted": weighted,
             "questions": out}
 
 
@@ -3129,12 +3134,19 @@ append-only audit log.</p>
 <p>We do not sell or share member data, run ads, use tracking pixels or
 third-party analytics, or send messages from this service. Election reminders
 go through DSA's existing communication platforms.</p>
-<h2>Where data lives</h2>
-<p>Data is stored in Google Cloud (Firestore, in DSA's own project) and
-processed only to run the election: eligibility, one-member-one-vote,
-tabulation, auditing, and the tamper-evidence chain. Ballot records are
-retained as the permanent election record; voided ballots are flagged, never
-deleted.</p>
+<h2>Where data lives — and who holds it</h2>
+<p>All election data is stored in and controlled by the <b>Democratic
+Socialists of America</b>, inside DSA's own Google Cloud project
+(<code>dsa-org-tools</code>) alongside DSA's membership data warehouse — the
+same infrastructure DSA staff already operate. The author of the RosaVote
+software (Walker Green) does <b>not</b> host, receive, or have access to your
+ballots, contacts, or any election data; the code is open source (AGPL-3.0)
+but the data belongs to DSA. Data is processed only to run the election:
+eligibility, one-member-one-vote, tabulation, auditing, and the
+tamper-evidence chain. Ballot records are retained by DSA as the permanent
+election record; voided ballots are flagged, never deleted. If a chapter or
+national committee runs its own copy of the software, that body — not the
+author — is the data controller for its deployment.</p>
 <h2>Verification</h2>
 <p>Your receipt code lets you confirm your ballot was stored
 (<code>/p/&lt;poll&gt;/verify</code>) without revealing content. Exported
