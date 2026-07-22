@@ -42,6 +42,16 @@ app = Flask(__name__)
 # Run default URL). Health checks and the ACME challenge path are never redirected.
 CANONICAL_HOST = os.environ.get("CANONICAL_HOST", "").strip().lower()
 
+# Split hosting: the marketing page is served on the apex (rosavote.org) and the
+# app itself on APP_HOST (app.rosavote.org). MARKETING_HOSTS get the pitch page
+# at "/"; every other host (the app subdomain, the run.app URL) gets the app
+# splash. APP_ORIGIN is where the marketing page's "open the app" links point
+# (empty = same-origin, for the /about copy on the app host).
+MARKETING_HOSTS = {h.strip().lower() for h in
+                   os.environ.get("MARKETING_HOSTS", "rosavote.org,www.rosavote.org").split(",")
+                   if h.strip()}
+APP_ORIGIN = os.environ.get("APP_ORIGIN", "").strip().rstrip("/")
+
 # AGPL-3.0 §13: users interacting with the (possibly modified) program over a
 # network must be offered its Corresponding Source. SOURCE_URL is that public
 # offer — surfaced in the footer of every page. Set it to the repository (or a
@@ -1906,7 +1916,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>RosaVote</b> &middot; <a href="/about" style="color:inherit">About</a> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; <a href="/about" style="color:inherit">About</a> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>support@rosavote.org</b><br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){
   var intro = document.getElementById("intro");
@@ -1924,7 +1934,10 @@ SPLASH = """<!doctype html><html lang="en"><head>
 
 @app.get("/")
 def index():
-    """Branded splash: per-chapter repeatable test codes + chapter ballot links."""
+    """Marketing page on the apex host; the app splash everywhere else."""
+    host = (request.host or "").split(":", 1)[0].lower()
+    if host in MARKETING_HOSTS:
+        return Response(_marketing_doc(), mimetype="text/html")
     polls = load_polls()
     links = "".join(f'<li><a href="/p/{pid}/">{cfg["name"]}</a></li>' for pid, cfg in polls.items())
     rows = "".join(
@@ -1955,9 +1968,10 @@ def _marketing_doc() -> str:
         title = (m.group(1).strip() if m else "RosaVote")
         body = raw.replace(m.group(0), "", 1) if m else raw
         # The authored file links to the app by absolute run.app URL (needed for
-        # the off-site artifact copy); served from the app, make them same-origin
-        # so they follow whatever host/domain is in front.
-        body = body.replace("https://member-ballot-v3-62155002849.us-east1.run.app", "")
+        # the off-site artifact copy). Point those at APP_ORIGIN (e.g.
+        # https://app.rosavote.org) so the marketing page on the apex sends
+        # visitors to the app host; empty falls back to same-origin.
+        body = body.replace("https://member-ballot-v3-62155002849.us-east1.run.app", APP_ORIGIN)
         _MARKETING_DOC = (
             "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -4007,7 +4021,7 @@ author — is the data controller for its deployment.</p>
 (<code>/p/&lt;poll&gt;/verify</code>) without revealing content. Exported
 ballot files are anonymous.</p>
 <h2>Contact</h2>
-<p>Questions or concerns: orgtools@dsausa.org.</p>
+<p>Questions or concerns: support@rosavote.org.</p>
 """
 
 

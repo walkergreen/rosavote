@@ -688,7 +688,7 @@
 <noscript><div style="background:#ffe1b2;border-bottom:2px solid #000;padding:14px 18px;font-family:Georgia,serif">
   <b>This ballot needs JavaScript.</b> Please enable JavaScript, or open this link in a
   different browser (Chrome, Safari, Firefox, or Edge) with no ballot-blocking extensions.
-  Still stuck? Email <a href="mailto:orgtools@dsausa.org">orgtools@dsausa.org</a> and your
+  Still stuck? Email <a href="mailto:support@rosavote.org">support@rosavote.org</a> and your
   chapter can help you vote.
 </div></noscript>
 <header class="vk-band"><div class="vk-band-inner"><div class="vk-wordmark">RosaVote<small>__CHAPTER_NAME__ &middot; Democratic Socialists of America</small></div><a class="vk-rose" href="/" style="border:none;padding:0;display:flex;" aria-label="RosaVote home"><img src="/logo.svg" alt="" width="34" height="34"/></a></div></header>
@@ -715,7 +715,7 @@
           </li>
           <li><b>Mailed a postcard?</b> Your code is printed on it; scan the QR or type it above.</li>
           <li><b>Eligible but got no code?</b> <a href="#" id="prov-link" style="color:var(--color-dsa);font-weight:700;">Cast a provisional ballot</a> &mdash; sealed, counts once membership verifies you.</li>
-          <li><b>Still stuck?</b> <a href="mailto:orgtools@dsausa.org?subject=__HELP_SUBJECT__" style="color:var(--color-dsa);font-weight:700;">Email orgtools@dsausa.org</a> &mdash; clicking the link pre-fills the subject with your chapter and the issue; just add your name and send.</li>
+          <li><b>Still stuck?</b> <a href="mailto:support@rosavote.org?subject=__HELP_SUBJECT__" style="color:var(--color-dsa);font-weight:700;">Email support@rosavote.org</a> &mdash; clicking the link pre-fills the subject with your chapter and the issue; just add your name and send.</li>
         </ol></details>
       </div>
     </div>
@@ -822,8 +822,8 @@
           you ever need help. Individual votes are visible to election administrators only
           and are never published publicly; results are released as totals. Votes are
           final: no revotes, no changes.</p>
-          <p class="vk-fine">Questions? <a id="help-link" href="mailto:orgtools@dsausa.org"
-          style="color:var(--color-dsa); font-weight:700;">Email orgtools@dsausa.org</a> —
+          <p class="vk-fine">Questions? <a id="help-link" href="mailto:support@rosavote.org"
+          style="color:var(--color-dsa); font-weight:700;">Email support@rosavote.org</a> —
           your receipt code is pre-filled in the subject so admins can find your ballot fast.</p>
         </div>
 
@@ -842,7 +842,7 @@
   </section>
 
 </main>
-<footer><b>RosaVote</b> &middot; __CHAPTER_NAME__ &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>orgtools@dsausa.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; __CHAPTER_NAME__ &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a><br/>Questions? Email <b>support@rosavote.org</b><br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){"use strict";
 var POLL_ID="__POLL_ID__",EMBEDDED_CODE="__CODE__";
@@ -1015,7 +1015,7 @@ $("cast-btn").addEventListener("click",function(){
    var isProv=d.status==="provisional_recorded";
    $("done-title").textContent=isProv?"Provisional Ballot Received":"Vote Recorded";
    var w=$("done-warn");if(w){w.hidden=!isProv;if(isProv)w.innerHTML="<b class='vk-warn-t'>Not counted yet</b>Your ballot is sealed until National Membership verifies your eligibility. You’ll be notified either way.";}
-   $("help-link").href="mailto:orgtools@dsausa.org?subject="+encodeURIComponent("[BALLOT26] Voting help — receipt "+d.receipt);
+   $("help-link").href="mailto:support@rosavote.org?subject="+encodeURIComponent("[BALLOT26] Voting help — receipt "+d.receipt);
    var vf=$("done-conf");if(vf&&!isProv)vf.innerHTML="Connection acting up? Confirm this receipt was stored anytime: "+
     "<a href='"+api("/verify?receipt="+encodeURIComponent(d.receipt))+"' style='color:var(--color-dsa);font-weight:700;'>verify receipt "+esc(d.receipt)+"</a>.";
    show("scr-done");}

@@ -159,8 +159,17 @@ ok(_ab.status_code == 200 and _ab.data[:15].lower().startswith(b"<!doctype html"
 _abt = _ab.data.decode()
 ok(all(x in _abt for x in ["RosaVote is the better default", "What would an election cost",
                            "aren't rivals", 'id="rose"']), "/about has marketing sections")
-ok("member-ballot-v3-62155002849" not in _abt and 'href="/vs-opavote"' in _abt,
-   "/about uses same-origin links (run.app rewritten)")
+ok("member-ballot-v3-62155002849" not in _abt,
+   "/about rewrites the run.app links")
+
+# host-based split: apex serves marketing, other hosts serve the app splash
+_apex = c.get("/", headers={"Host": "rosavote.org"})
+ok(_apex.status_code == 200 and b"RosaVote is the better default" in _apex.data,
+   "apex host '/' serves the marketing page")
+_approot = c.get("/", headers={"Host": "app.rosavote.org"})
+ok(_approot.status_code == 200 and b"RosaVote is the better default" not in _approot.data
+   and b"__TEST_ROWS__" not in _approot.data,
+   "app host '/' serves the app splash, not marketing")
 
 # vote: identity-linked main record, secret delegate record
 r = c.post("/p/debs_endorsement__nyc/vote", json={"code": "A" * 16, "answers": GOOD})
