@@ -5,25 +5,45 @@ and DDoS/rate-limit protection. Two edge options are covered — **Cloudflare**
 (simplest) and **Google Cloud load balancer + Cloud Armor** (all-Google). Pick
 **one** edge; don't stack both.
 
-Recommended domains: **`rosavote.org`** (primary) + **`rosavote.com`** (redirects
-to `.org`). Hosts: `vote.rosavote.org` (prod), `staging.rosavote.org` (staging).
+**Canonical: `rosavote.org`** (apex — bare `rosavote.org`, no `www`).
+**`rosavote.com`** and **`www.rosavote.org`** both 301 → the canonical host.
+Staging: `staging.rosavote.org`.
+
+> Registrar: with `.vote` off the table, **Cloudflare Registrar** is the best
+> pick — at-cost `.org`/`.com`, free WHOIS privacy, and the domain lands right
+> on the Cloudflare DNS/WAF edge below. (Porkbun is a fine alternative.)
 
 ---
 
-## 0. The `.com → .org` redirect is already handled in the app
+## 0. One-move go-live (after you own the domain)
 
-The Flask app does a 301 from any non-canonical host to `CANONICAL_HOST`
-(`vote_service.py`, `_canonical_host_redirect`). So the redirect works no matter
-which edge you use — just:
+The redirect and every internal link are host-agnostic, so bringing a domain
+online is essentially one script + one env var.
 
-1. Point **both** `rosavote.com` and `rosavote.org` (and `www`) at the same
-   service, and
-2. Set `CANONICAL_HOST=vote.rosavote.org` in the prod service's env
-   (`--set-env-vars CANONICAL_HOST=vote.rosavote.org`).
+```sh
+# From the repo root — maps the domain to Cloud Run and prints the DNS records.
+infra/map-domain.sh rosavote.org
+# ...add the A/AAAA records it prints at your DNS host, wait for the cert, then:
+gcloud run services update member-ballot-v3 --region us-east1 \
+  --set-env-vars CANONICAL_HOST=rosavote.org
+```
 
-Then `https://rosavote.com/anything` → `301` → `https://vote.rosavote.org/anything`.
-You can *also* do the redirect at the edge (below) to save a round-trip; doing
-both is fine and harmless.
+That's it — `/about`, `/vs-opavote`, ballot links, etc. all serve from
+`https://rosavote.org/...` and any other host 301s to it. (Prefer Cloudflare's
+WAF in front? Use the load-balancer path in §3 instead of `map-domain.sh`.)
+
+## 0b. The alias → canonical redirect is already in the app
+
+The Flask app 301s any non-canonical host to `CANONICAL_HOST`
+(`vote_service.py`, `_canonical_host_redirect`), so `rosavote.com` and
+`www.rosavote.org` funnel to the canonical automatically — just:
+
+1. Point `rosavote.com` and `www.rosavote.org` at the same service, and
+2. Set `CANONICAL_HOST=rosavote.org`
+   (`--set-env-vars CANONICAL_HOST=rosavote.org`).
+
+Then `https://rosavote.com/anything` → `301` → `https://rosavote.org/anything`.
+Doing the redirect at the edge too (below) is fine and saves a round-trip.
 
 ---
 
@@ -69,10 +89,16 @@ then add records (proxied = "orange cloud" ON):
 | CNAME | `vote`              | `ghs.googlehosted.com`              | ON    |
 | CNAME | `staging`           | `ghs.googlehosted.com`              | ON    |
 
+**Apex `rosavote.org`:** an apex can't be a CNAME. Either (a) run
+`infra/map-domain.sh rosavote.org` and add the **A/AAAA** records it prints, or
+(b) on Cloudflare, a proxied (orange-cloud) CNAME at the apex works via
+**CNAME flattening** — point it at your domain-mapping target or the LB. A
+subdomain like `staging.rosavote.org` takes a normal CNAME.
+
 For **Cloud Run custom domains**, either use Cloud Run **domain mappings**
-(`gcloud run domain-mappings create --service member-ballot-v3 --domain
-vote.rosavote.org`) which give you the exact DNS target to enter, or front Cloud
-Run with a load balancer (Option B) and point the CNAME at the LB IP.
+(`infra/map-domain.sh`, or `gcloud run domain-mappings create --service
+member-ballot-v3 --domain rosavote.org --region us-east1`) which give you the
+exact DNS records to enter, or front Cloud Run with a load balancer (Option B).
 
 On `rosavote.com`, add the same `vote`/root records **or** just rely on the app
 redirect (point `rosavote.com` root at the prod service and let Flask 301 it).
@@ -122,9 +148,9 @@ gcloud compute backend-services add-backend rosavote-backend --global \
 
 gcloud compute url-maps create rosavote-lb --default-service rosavote-backend
 
-# managed TLS cert for both hosts (add rosavote.com if terminating it here)
+# managed TLS cert for all hosts terminated here (apex + aliases + staging)
 gcloud compute ssl-certificates create rosavote-cert --global \
-  --domains=vote.rosavote.org,staging.rosavote.org
+  --domains=rosavote.org,www.rosavote.org,rosavote.com,staging.rosavote.org
 
 gcloud compute target-https-proxies create rosavote-https \
   --url-map=rosavote-lb --ssl-certificates=rosavote-cert
@@ -162,8 +188,8 @@ If you buy at **Porkbun** and don't use Cloudflare:
 
 ## 5. Go-live checklist
 
-- [ ] Domains bought; `vote.` and `staging.` resolve to the right services.
-- [ ] `CANONICAL_HOST` set on prod; `rosavote.com` 301s to `.org` (test it).
+- [ ] Domains bought; `rosavote.org` (apex) and `staging.` resolve to the right services.
+- [ ] `CANONICAL_HOST=rosavote.org` set on prod; `rosavote.com`/`www` 301 to it (test it).
 - [ ] Staging on its own Firestore DB + token; `smoke_test.py` green in CI.
 - [ ] One edge chosen (Cloudflare **or** Cloud Armor) with global + `/admin`
       rate limits.
