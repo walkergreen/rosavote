@@ -201,17 +201,19 @@ regardless of window and refuse builder edits without an explicit
   receipt, code_hash only (admin troubleshooting trace). ADMIN-ONLY; chapters
   never get access. Both ballot docs carry receipt/nonce/record_hash and a
   `voided` flag (never delete; excluded from tallies, kept in chain).
-  **KNOWN LIMIT — secrecy is PSEUDONYMITY, not unlinkability.** The secret
-  doc keeps TWO join keys back to the voter: the shared `receipt` (paired
-  with `{poll}__ballots.receipt` → member_id) and `code_hash` (paired with
-  `{poll}__codes` → member_id). Anyone holding raw database access — a
-  Firestore export, a PITR restore, a broad IAM grant — can therefore
-  de-anonymize every delegate ranking. No API exposes the join (the console's
-  lookup returns only recorded-yes/no), so the guarantee currently rests on
-  IAM discipline rather than the data model. Closing it is a policy decision,
-  not a refactor: dropping `code_hash` costs the documented troubleshooting
-  trace, and dropping `receipt` costs the `secret_ballot_recorded` check.
-  Decide before any real delegate election.
+  **DECIDED POLICY — secrecy is from CHAPTERS, not from national admins.**
+  The secret doc deliberately keeps TWO join keys back to the voter: the
+  shared `receipt` (paired with `{poll}__ballots.receipt` → member_id) and
+  `code_hash` (paired with `{poll}__codes` → member_id). An administrator
+  with database access can therefore de-anonymize a delegate ranking, and
+  that is intended — it preserves the troubleshooting trace and the
+  `secret_ballot_recorded` check. Art. V §5 secrecy here means the ranking is
+  withheld from chapters and never published by name; it is NOT
+  cryptographic unlinkability, and the app must not be described as if it
+  were. Do not "harden" this by stripping the join keys without a policy
+  change. What follows from it: the control is IAM, so keep raw Firestore
+  access (and PITR restores, and exports) to the smallest possible set of
+  people, and keep every admin path that touches the join audit-logged.
 - Receipts are 64-bit (`new_receipt()`, 16 chars; provisionals `P`+56-bit).
   The receipt is the lookup key for `verify`, `void`, and the published
   `ballots.csv`, and the PROVISIONAL receipt is a document id — the old
