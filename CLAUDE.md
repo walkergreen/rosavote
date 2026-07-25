@@ -213,7 +213,10 @@ regardless of window and refuse builder edits without an explicit
   were. Do not "harden" this by stripping the join keys without a policy
   change. What follows from it: the control is IAM, so keep raw Firestore
   access (and PITR restores, and exports) to the smallest possible set of
-  people, and keep every admin path that touches the join audit-logged.
+  people, and keep every admin path that touches the join audit-logged. The
+  app surface no longer *exercises* that capability by default — see
+  `admin_sees_answers` under Decided policy. The linkage exists for
+  troubleshooting under audit, not for routine reading.
 - Receipts are 64-bit (`new_receipt()`, 16 chars; provisionals `P`+56-bit).
   The receipt is the lookup key for `verify`, `void`, and the published
   `ballots.csv`, and the PROVISIONAL receipt is a document id — the old
@@ -243,12 +246,50 @@ BLT export: `GET /admin/api/polls/<pid>/blt/<qkey>[?recount=1][&live=1]`
 (same gating as results); console Results tab has downloads + independent-
 verification instructions.
 
+## Visibility is PER QUESTION (three modes)
+
+One meeting can take a recorded vote on a motion and a secret ballot for
+officers, so `visibility` is a per-question field (`q_visibility()`,
+`VISIBILITIES`), not a poll-level setting:
+
+- `named` (DEFAULT, and what every pre-existing non-secret question does) —
+  identity-linked in `{poll}__ballots`; admins + the voter's own chapter;
+  only aggregates published.
+- `public` — same storage, plus a by-name ROLL CALL published at
+  `GET /p/<poll>/rollcall/<qkey>.csv` and rendered inline on the results page
+  (≤ `ROLLCALL_INLINE_MAX`; the CSV is always linked) and written into the
+  export zip. Voided ballots are listed and flagged, never dropped — a roll
+  call that omits a cancelled vote reads as if the member never voted.
+- `secret` — content in `{poll}__delegate_ballots` with no identity. The
+  contest's anonymous BLT is PUBLISHED at `/p/<poll>/verify/<qkey>.blt`
+  (rankings + weights, zero identity) so a secret election is still publicly
+  recountable — it previously wasn't, since secret answers never enter the
+  `ballots.csv` the public gets.
+
+`secret: true` remains the storage flag every downstream path reads, but it
+is now DERIVED from visibility in `_validate_questions` — set `visibility`,
+not `secret`. Legacy configs carrying `secret`/`delegate` and no `visibility`
+map to `secret` automatically. `text` questions are always `named` (prose can
+be neither anonymized nor safely published) and the builder disables the
+control for them. `delegate: true` pins `secret` (Art. V §5).
+
+Roll calls and secret BLTs both require finalized + results_published.
+
 ## Decided policy (do not silently change)
 
-- Visibility: Sections 1&3 recorded by name (admin + own chapter); delegate
-  ranking secret; national does NOT publish chapter results — each chapter
-  decides its own publication (never delegate rankings). Disclosed to voters
-  above Q1.
+- Visibility defaults: Sections 1&3 recorded by name (admin + own chapter);
+  delegate ranking secret; national does NOT publish chapter results — each
+  chapter decides its own publication (never delegate rankings). Disclosed to
+  voters above Q1. A body wanting a recorded vote sets `visibility: public`
+  on that question — it is opt-in per question, never a default.
+- ADMINS DO NOT SEE BALLOT CONTENT BY DEFAULT. Every admin remedy — void and
+  reissue, provisional adjudication, close-out, turnout, the integrity
+  counter — is a metadata operation and needs no answers. `admin_ballot_lookup`
+  returns per-question `recorded` yes/no plus a `blank` flag, which answers
+  "did my ballot land?" completely. Answers come back only for `public`
+  questions (published anyway) or when the poll sets `admin_sees_answers`
+  (per-poll opt-in, restores the pre-2026-07 behavior). Secret rankings are
+  never returned in any mode.
 - Votes final: no edit, no revote. Admin remedy = VOID-AND-REISSUE only
   (reasons whitelist: stolen_code, technical_failure,
   provisional_adjudication; open window only; audited; disclosed aggregate).

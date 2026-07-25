@@ -253,8 +253,39 @@ def poll_questions(cfg) -> list:
     return cfg.get("questions") or demo_questions(cfg)
 
 
+# ---- visibility: who may learn how a given member voted -------------------
+# Bodies differ, and the difference is per QUESTION, not per poll: the same
+# meeting can take a recorded roll-call vote on a motion and a secret ballot
+# for officers.
+#   public — identity-linked AND published by name (recorded roll call)
+#   named  — identity-linked; admins + the voter's own chapter; only
+#            aggregates are published. The default, and what every existing
+#            non-secret question already does.
+#   secret — content stored with NO identity, in the admin-only collection
+#            (Const. Art. V §5 delegate elections, and any question flagged
+#            secret). Published as an anonymous ballot file so the result is
+#            still independently recountable.
+VISIBILITIES = ("public", "named", "secret")
+
+
+def q_visibility(q) -> str:
+    """A question's visibility. Legacy configs predate the field: `secret`
+    (and `delegate`, which implies it) meant the secret storage split, and
+    everything else was named."""
+    v = str(q.get("visibility") or "").strip().lower()
+    if v in VISIBILITIES:
+        return v
+    return "secret" if (q.get("secret") or q.get("delegate")) else "named"
+
+
 def secret_keys(cfg) -> list:
-    return [q["key"] for q in poll_questions(cfg) if q.get("secret")]
+    return [q["key"] for q in poll_questions(cfg) if q_visibility(q) == "secret"]
+
+
+def public_keys(cfg) -> list:
+    """Questions published as a by-name roll call."""
+    return [q["key"] for q in poll_questions(cfg)
+            if q_visibility(q) == "public" and q["type"] != "text"]
 
 
 def validate_answers(data, cfg) -> tuple[dict, dict]:
@@ -1173,6 +1204,11 @@ h2{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:0 0 8p
 .win{{font-family:system-ui,sans-serif;font-size:.95rem}}.k{{font-family:system-ui,sans-serif;
 font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#dd1111;font-weight:700}}
 footer{{text-align:center;font:12px system-ui,sans-serif;color:rgba(0,0,0,.55);padding:16px}}
+table.rc{{width:100%;border-collapse:collapse;font:.85rem system-ui,sans-serif;margin-top:8px;
+display:block;overflow-x:auto}}
+table.rc th,table.rc td{{border:1px solid rgba(0,0,0,.25);padding:4px 6px;text-align:left;
+vertical-align:top}}
+table.rc th{{background:#fff5e5;text-transform:uppercase;font-size:.7rem;letter-spacing:.06em}}
 a{{color:#dd1111}}</style></head><body>
 <div class="banner"><img src="/logo.svg" alt="" style="height:30px;vertical-align:-8px;margin-right:6px"/>RosaVote<small>{title} — Official Results</small></div>
 <main>{body}</main>
@@ -1265,6 +1301,21 @@ def public_results(poll_id):
         elif q["type"] == "text":
             inner = (f'<p class="win">{q["responses"]} written response(s) received '
                      '(content reviewed by election administration).</p>')
+        if q.get("visibility") == "public":
+            # Recorded roll call: this body publishes how each member voted.
+            qdef = next((x for x in poll_questions(cfg) if x["key"] == q["key"]), None)
+            rows = roll_call_rows(poll_id, qdef) if qdef else []
+            link = (f'<p class="win"><a href="/p/{poll_id}/rollcall/{q["key"]}.csv">'
+                    f'Download the full roll call ({len(rows)} ballots, CSV)</a></p>')
+            inner += ('<p class="k">Recorded vote — this question is published by name</p>'
+                      + link)
+            if 0 < len(rows) <= ROLLCALL_INLINE_MAX:
+                inner += ('<table class="rc"><tr><th>Member</th><th>Chapter</th>'
+                          '<th>Vote</th></tr>' + "".join(
+                    f'<tr><td>{_esc(r["member_id"])}</td><td>{_esc(r["chapter"])}</td>'
+                    f'<td>{_esc(r["answer"])}'
+                    + (' <b>(VOIDED — not counted)</b>' if r["voided"] else '')
+                    + '</td></tr>' for r in rows) + '</table>')
         cards.append(f'<div class="card"><h2>{_esc(q["title"])}</h2>{inner}</div>')
     meta = (f'<div class="card"><p class="win">{res["ballots_counted"]} ballots counted'
             + (" · weighted election (ballots count at each voter's assigned weight)"
@@ -1490,6 +1541,25 @@ def verify_file(poll_id, fname):
         return "Unknown poll.", 404
     if not (cfg.get("finalized") and cfg.get("results_published")):
         return "Verification files publish after the election is finalized.", 409
+    if fname.endswith(".blt"):
+        # SECRET contests are absent from ballots.csv by design (their content
+        # never enters the identity-linked collection), which left the
+        # highest-stakes race — the delegate election — as the one nobody
+        # outside administration could recount. The BLT carries rankings and
+        # weights and NO identity at all, so publishing it restores public
+        # verifiability without touching ballot secrecy.
+        qkey = fname[:-4]
+        q = next((x for x in poll_questions(cfg)
+                  if x["key"] == qkey and q_visibility(x) == "secret"
+                  and x["type"] == "ranked"), None)
+        if not q:
+            return "Not found.", 404
+        _, _, secret_rows = _tally_rows(poll_id)
+        blt = _blt_text(secret_rows, qkey, q["options"], int(q.get("seats", 1)),
+                        title=f"{cfg.get('name', poll_id)} - {q['title']}")
+        return Response(blt, mimetype="text/plain",
+                        headers={"Content-Disposition": f"inline; filename={fname}",
+                                 "Cache-Control": "public, max-age=300"})
     if fname not in ("ballots.csv", "used_codes.csv", "chain_head.txt"):
         return "Not found.", 404
     ballots_csv, used_csv, head = _build_verification(poll_id)
@@ -1498,6 +1568,30 @@ def verify_file(poll_id, fname):
     mt = "text/plain" if fname.endswith(".txt") else "text/csv"
     return Response(body, mimetype=mt,
                     headers={"Content-Disposition": f"inline; filename={fname}",
+                             "Cache-Control": "public, max-age=300"})
+
+
+ROLLCALL_INLINE_MAX = 300     # bigger than this, the page links the CSV only
+
+
+@app.get("/p/<poll_id>/rollcall/<qkey>.csv")
+def rollcall_csv(poll_id, qkey):
+    """PUBLIC by-name roll call for a question the poll declares
+    `visibility: public` — the recorded vote some bodies require. Same gate as
+    the results page: finalized AND published. A question that is `named` or
+    `secret` is never served here, whatever the caller asks for."""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return "Unknown poll.", 404
+    if not (cfg.get("finalized") and cfg.get("results_published")):
+        return "Roll calls publish after the election is finalized.", 409
+    q = next((x for x in poll_questions(cfg)
+              if x["key"] == qkey and q_visibility(x) == "public"), None)
+    if not q:
+        return "Not a published roll-call question.", 404
+    return Response(_roll_call_csv(roll_call_rows(poll_id, q)), mimetype="text/csv",
+                    headers={"Content-Disposition":
+                             f"attachment; filename={poll_id}_{qkey}_rollcall.csv",
                              "Cache-Control": "public, max-age=300"})
 
 
@@ -2281,6 +2375,21 @@ def _validate_questions(qs, errors, warnings):
         if "required" in q:
             nq["required"] = bool(q["required"])
 
+        raw_vis = str(q.get("visibility") or "").strip().lower()
+        if raw_vis and raw_vis not in VISIBILITIES:
+            errors.append(f"question {key!r}: visibility must be one of {VISIBILITIES}")
+        vis = q_visibility(q)
+        if typ == "text" and vis != "named":
+            # Free text is stored as an identity-linked comment, never in the
+            # canonical answers — it can be neither anonymized nor published.
+            errors.append(f"question {key!r}: text questions are always 'named' "
+                          "(free text is never published or anonymized)")
+            vis = "named"
+        nq["visibility"] = vis
+        # `secret` stays the storage flag every downstream path reads; it is
+        # now derived from visibility rather than set independently.
+        nq["secret"] = (vis == "secret")
+
         if typ in ("ranked", "multi", "score"):
             opts, seen = [], set()
             for c in (q.get("options") or []):
@@ -2374,7 +2483,8 @@ def _validate_questions(qs, errors, warnings):
                     if con["tag"] not in all_tags:
                         warnings.append(f"question {key!r}: constraint tag "
                                         f"{con['tag']!r} matches no candidate tags")
-            nq["secret"] = bool(q.get("secret")) or bool(q.get("delegate"))
+            # nq["secret"] already came from visibility above; `delegate`
+            # implies it, which q_visibility() accounts for.
             nq["delegate"] = bool(q.get("delegate"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
             for f in ("real_delegates", "real_alternates"):
@@ -2431,7 +2541,6 @@ def _validate_questions(qs, errors, warnings):
                 warnings.append(f"question {key!r}: multi-seat STAR is sequential "
                                 "(majoritarian), not proportional — use ranked STV "
                                 "or Meek for a proportional multi-winner contest")
-            nq["secret"] = bool(q.get("secret"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
             if nq["options"] and len(nq["options"]) <= seats:
                 warnings.append(f"question {key!r} uncontested: {len(nq['options'])} "
@@ -2605,6 +2714,11 @@ def validate_poll_config(poll_id: str, body: dict):
         cfg["quota_groups"] = qgroups
     if body.get("demo"):
         cfg["demo"] = True   # demo/test poll: stays votable even when finalized
+    if body.get("admin_sees_answers"):
+        # Off by default: troubleshooting works from recorded-yes/no alone.
+        # A body that wants administrators able to read a named ballot
+        # (the pre-2026-07 behavior) opts in here, per poll.
+        cfg["admin_sees_answers"] = True
     if questions is not None:
         cfg["questions"] = questions
     else:
@@ -2963,6 +3077,55 @@ def _tally_rows(poll_id: str):
     return main_rows, comments_rows, secret_rows
 
 
+def _answer_display(v, q, names=None) -> str:
+    """One voter's answer to one question, as a person reads it. Option ids
+    are resolved to candidate names so a roll call is legible without the
+    config next to it."""
+    names = names if names is not None else {
+        o["id"]: o["name"] for o in (q.get("options") or [])}
+    if v is None or v == "":
+        return "(no answer)"
+    if isinstance(v, dict):        # score: {option_id: rating}
+        return "; ".join(f"{names.get(k, k)}={v[k]}" for k in sorted(v))
+    if isinstance(v, list):        # ranked (ordered) / multi (a set)
+        if v == ["ABSTAIN"]:
+            return "ABSTAIN"
+        sep = " > " if q["type"] == "ranked" else ", "
+        return sep.join(names.get(str(x).upper(), str(x)) for x in v)
+    return str(v)
+
+
+def roll_call_rows(poll_id: str, q: dict):
+    """By-name record for a `public` question: who voted, and how.
+
+    Only ever called for questions the poll declares `visibility: public` —
+    the recorded roll call some bodies require. Voided ballots are included
+    and flagged rather than dropped, because a roll call that quietly omits
+    a cancelled vote reads as if the member never voted at all."""
+    names = {o["id"]: o["name"] for o in (q.get("options") or [])}
+    rows = []
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        rows.append({
+            "member_id": str(d.get("member_id") or ""),
+            "chapter": str(d.get("chapter") or ""),
+            "answer": _answer_display((d.get("answers") or {}).get(q["key"]), q, names),
+            "voided": bool(d.get("voided")),
+            "provisional": bool(d.get("provisional")),
+        })
+    rows.sort(key=lambda r: (r["chapter"], r["member_id"]))
+    return rows
+
+
+def _roll_call_csv(rows) -> str:
+    lines = ["member_id,chapter,answer,voided,provisional"]
+    for r in rows:
+        lines.append(",".join([_csv_cell(r["member_id"]), _csv_cell(r["chapter"]),
+                               _csv_cell(r["answer"]), str(r["voided"]).lower(),
+                               str(r["provisional"]).lower()]))
+    return "\n".join(lines) + "\n"
+
+
 def _is_blank_answer(v, typ) -> bool:
     """An answer that carries no real selection — empty or all-abstain. An
     all-blank ballot is the signature of a client glitch or a bot that opened
@@ -2994,7 +3157,8 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
     for q in all_questions:
         key, typ = q["key"], q["type"]
         entry = {"key": key, "type": typ, "title": q["title"],
-                 "secret": bool(q.get("secret"))}
+                 "secret": bool(q.get("secret")),
+                 "visibility": q_visibility(q)}
         rows = secret_rows if q.get("secret") else main_rows
         if typ != "text":
             entry["blank"] = sum(w for a, w in rows
@@ -3229,7 +3393,8 @@ def admin_ballot_lookup(poll_id):
     ident = require_admin(poll_id, national_only=True)
     if not ident:
         return jsonify({"error": "forbidden"}), 403
-    if not chapter_or_none(poll_id):
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
         return jsonify({"error": "unknown_poll"}), 404
     member_id = str(request.args.get("member_id", "")).strip()
     receipt = str(request.args.get("receipt", "")).strip().upper()
@@ -3249,18 +3414,42 @@ def admin_ballot_lookup(poll_id):
             r = (snap.to_dict() or {}).get("receipt")
             if r in wanted:
                 secret_receipts.add(r)
+    # CONTENT IS OFF BY DEFAULT. Troubleshooting asks "did this member's
+    # ballot land?", which recorded-yes/no per question answers completely —
+    # the same proof `secret_ballot_recorded` has always given for delegate
+    # questions, now applied to all of them. Answers come back only for
+    # questions the poll publishes by name anyway, or when the body has
+    # deliberately set admin_sees_answers on the poll.
+    show = bool(cfg.get("admin_sees_answers"))
+    qs = [q for q in poll_questions(cfg) if q["type"] != "text"]
+    visible = {q["key"] for q in qs
+               if q_visibility(q) == "public" or (show and q_visibility(q) != "secret")}
     _audit(poll_id, "ballot_lookup", ident["name"],
            member_id=member_id or None, receipt=receipt or None,
-           found=len(matches))
-    return jsonify({"found": len(matches), "ballots": [{
-        "receipt": d.get("receipt"), "member_id": d.get("member_id"),
-        "chapter": d.get("chapter"),
-        "answers": d.get("answers"), "comments": d.get("comments") or {},
-        "voided": bool(d.get("voided")), "void_reason": d.get("void_reason"),
-        "provisional": bool(d.get("provisional")),
-        "record_hash": d.get("record_hash"),
-        "secret_ballot_recorded": d.get("receipt") in secret_receipts,
-    } for d in matches]}), 200
+           found=len(matches), answers_shown=bool(visible))
+
+    def _one(d):
+        a = d.get("answers") or {}
+        out = {
+            "receipt": d.get("receipt"), "member_id": d.get("member_id"),
+            "chapter": d.get("chapter"),
+            "voided": bool(d.get("voided")), "void_reason": d.get("void_reason"),
+            "provisional": bool(d.get("provisional")),
+            "record_hash": d.get("record_hash"),
+            "secret_ballot_recorded": d.get("receipt") in secret_receipts,
+            # per-question proof of recording, with no content
+            "recorded": {q["key"]: (q["key"] in a) for q in qs},
+            # the blank-ballot signature the console flags, computed here so
+            # nobody has to read a ballot to investigate a spike
+            "blank": all(_is_blank_answer(a.get(q["key"]), q["type"]) for q in qs) if qs else False,
+            "answers_shown": sorted(visible),
+        }
+        if visible:
+            out["answers"] = {k: v for k, v in a.items() if k in visible}
+            out["comments"] = d.get("comments") or {} if show else {}
+        return out
+    return jsonify({"found": len(matches),
+                    "ballots": [_one(d) for d in matches]}), 200
 
 
 @app.post("/admin/api/polls/<poll_id>/recount_preview")
@@ -3467,7 +3656,9 @@ def _results_txt(res: dict) -> str:
     out.append("")
     for q in res["questions"]:
         out.append("=" * 72)
-        out.append(q["title"] + ("   [secret ballot]" if q.get("secret") else ""))
+        out.append(q["title"] + {"secret": "   [secret ballot]",
+                                 "public": "   [recorded roll call — published by name]",
+                                 }.get(q.get("visibility", ""), ""))
         if q["type"] == "yesno":
             c = q["counts"]
             out.append(f"  Yes {c['YES']} · No {c['NO']} · Abstain {c['ABSTAIN']}"
@@ -3649,6 +3840,11 @@ def admin_export_zip(poll_id):
                         '"' + str(d.get("chapter") or "").replace('"', '""') + '"']
             lines.append(",".join(row))
         z.writestr("ballots.csv", "\n".join(lines) + "\n")
+        # by-name roll call for every question this body publishes by name
+        for q in poll_questions(cfg):
+            if q_visibility(q) == "public" and q["type"] != "text":
+                z.writestr(f"rollcall_{q['key']}.csv",
+                           _roll_call_csv(roll_call_rows(poll_id, q)))
     buf.seek(0)
     _audit(poll_id, "export_zip", ident["name"], anonymize=anonymize)
     return Response(buf.read(), mimetype="application/zip",
@@ -4297,7 +4493,9 @@ API_GROUPS = [
         ("POST", "/p/&lt;poll&gt;/vote", "Voting code (in body)", "Cast a ballot: {code, answers:{questionKey:value}}. One code = one vote, enforced atomically. → {status:'recorded', receipt}."),
         ("POST", "/p/&lt;poll&gt;/provisional", "None", "Cast a sealed provisional ballot with identifying info for later adjudication."),
         ("GET", "/p/&lt;poll&gt;/verify?receipt=…", "None", "Confirm a ballot was stored → {found, status}. No identity, no answers — safe to share."),
-        ("GET", "/p/&lt;poll&gt;/results", "None", "Public results page (only after finalize + publish). Aggregate only; served from a frozen cache."),
+        ("GET", "/p/&lt;poll&gt;/results", "None", "Public results page (only after finalize + publish). Aggregates, plus a by-name roll call for any question the poll declares visibility:public."),
+        ("GET", "/p/&lt;poll&gt;/rollcall/&lt;question&gt;.csv", "None", "Recorded roll call — member_id, chapter, and how they voted — for a visibility:public question. Named and secret questions are never served here. Requires finalize + publish."),
+        ("GET", "/p/&lt;poll&gt;/verify/&lt;file&gt;", "None", "Verification artifacts after finalize + publish: ballots.csv, used_codes.csv, chain_head.txt, and &lt;question&gt;.blt for each secret ranked contest (anonymous rankings + weights, no identity — so a secret election is still publicly recountable)."),
     ]),
     ("Admin — auth", [
         ("GET", "/admin/api/whoami", "X-Admin-Token", "Resolve the caller's identity → {name, role, polls}."),
