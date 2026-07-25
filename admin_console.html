@@ -1618,12 +1618,25 @@ $("publish-btn").onclick = function(){
   var pub = !c.results_published;
   if(!confirm(pub ? "PUBLISH the public results page for "+c.name+"?\nAnyone with the link "+location.origin+"/p/"+pid+"/results can view outcomes and aggregate counts (never individual ballots)."
                   : "UNPUBLISH the public results page for "+c.name+"?")) return;
-  api("/admin/api/polls/"+pid+"/publish", {method:"POST", body: JSON.stringify({publish: pub})}).then(function(r){
+  doPublish(pid, pub, false);
+};
+function doPublish(pid, pub, force){
+  api("/admin/api/polls/"+pid+"/publish", {method:"POST", body: JSON.stringify({publish: pub, force: !!force})}).then(function(r){
     if(r.status===200){
       msg("results-msg","okc", pub ? ("Published — share this link with voters:\n"+location.origin+r.body.url)
                                    : "Public results page unpublished.");
       loadPolls();
-    } else msg("results-msg","err",(r.body.message||JSON.stringify(r.body)));
+      return;
+    }
+    if(r.status===409 && r.body.error==="provisionals_pending"){
+      // Publishing freezes the tally; a pending provisional would never appear in it.
+      if(confirm(r.body.pending+" provisional ballot(s) are still awaiting adjudication.\n\n"+
+                 "Publishing now freezes a result that EXCLUDES them. Adjudicate the queue first "+
+                 "unless you have a reason not to.\n\nPublish anyway?")) doPublish(pid, pub, true);
+      else msg("results-msg","warn","Not published — clear the adjudication queue first.");
+      return;
+    }
+    msg("results-msg","err",(r.body.message||JSON.stringify(r.body)));
   });
 };
 $("blt-refresh").onclick = function(){

@@ -69,9 +69,33 @@ class FakeColl:
                 yield FakeSnap(FakeRef(coll, key), d)
 
 
+class FakeTxn:
+    """Transaction handle. Applies writes immediately — enough to exercise the
+    call shape (all reads before writes, ballot + code burn issued together);
+    real atomicity is Firestore's job."""
+    def set(self, ref, d):
+        ref.set(d)
+    def update(self, ref, d):
+        ref.update(d)
+
+
+class FakeBatch:
+    def __init__(self):
+        self.ops = []
+    def set(self, ref, d):
+        self.ops.append((ref, d))
+    def commit(self):
+        if len(self.ops) > 500:
+            raise AssertionError("Firestore rejects a WriteBatch over 500 ops")
+        for ref, d in self.ops:
+            ref.set(d)
+        self.ops = []
+
+
 fake_fs = types.ModuleType("google.cloud.firestore")
 fake_fs.Client = lambda *a, **k: types.SimpleNamespace(
-    collection=lambda nm: FakeColl(nm), transaction=lambda: None)
+    collection=lambda nm: FakeColl(nm), transaction=lambda: FakeTxn(),
+    batch=lambda: FakeBatch())
 fake_fs.SERVER_TIMESTAMP = "TS"
 fake_fs.transactional = lambda f: f
 fake_exc = types.ModuleType("google.api_core.exceptions")
@@ -1206,5 +1230,122 @@ ok(c.post("/admin/api/polls/special_ref2", headers=hdr, json={
     "name": "X", "questions": [{"key": "d", "type": "ranked", "title": "D", "seats": 1,
     "alternates": 1, "alternate_method": "nonsense", "options": [{"id": "AA", "name": "A"}]}]
     }).status_code == 400, "invalid alternate_method rejected")
+
+
+
+# ---- adversarial-review regressions --------------------------------------
+# Each block pins a defect found in review. A dedicated open poll keeps these
+# independent of the finalize/close state the earlier sections leave behind.
+AR = "adv_review"
+ok(c.post(f"/admin/api/polls/{AR}", headers=hdr, json={
+    "name": "Adversarial Review", "opens_at": "2020-01-01T00:00",
+    "closes_at": "2099-01-01T00:00",
+    "questions": [{"key": "m", "type": "yesno", "title": "Measure"}]
+    }).status_code == 200, "adversarial-review fixture poll created")
+AR_ANS = {"m": "YES"}
+
+# 1. RECEIPT ENTROPY. A 32-bit receipt collides ~twice across a 120k-voter
+# election, and receipt is the lookup key for verify / void / the published
+# ballots.csv — two voters would resolve to each other's ballot.
+_rc = c.post(f"/p/{AR}/vote", json={"code": "RCPT" + "T" * 12, "answers": AR_ANS})
+ok(_rc.status_code == 200 and len(_rc.get_json()["receipt"]) == 16
+   and vote_service.RECEIPT_RE.match(_rc.get_json()["receipt"]),
+   "coded receipt is 64-bit (16 chars) and still matches RECEIPT_RE")
+vote_service._prov_hits.clear()
+_p1 = c.post(f"/p/{AR}/provisional", json={"info": info, "answers": AR_ANS}).get_json()["receipt"]
+_p2 = c.post(f"/p/{AR}/provisional", json={"info": info, "answers": AR_ANS}).get_json()["receipt"]
+ok(_p1[0] == "P" and len(_p1) == 15 and _p1 != _p2 and vote_service.RECEIPT_RE.match(_p1),
+   "provisional receipt is 56-bit — it IS the doc id, so a collision would "
+   "overwrite another member's sealed ballot")
+
+# 2. AMBIGUOUS RECEIPT. Legacy short receipts can collide; voiding "the first
+# match" would cancel a ballot at random.
+for _k, _m in (("dup1", "D1"), ("dup2", "D2")):
+    DOCS[(f"{AR}__ballots", _k)] = {"receipt": "DUPDUPDUP", "member_id": _m,
+                                    "answers": {}, "record_hash": _k}
+ok(c.post(f"/p/{AR}/admin/void", headers=hdr,
+          json={"receipt": "DUPDUPDUP", "reason": "stolen_code"}).status_code == 409,
+   "void refuses an ambiguous receipt instead of voiding one at random")
+DOCS.pop((f"{AR}__ballots", "dup1")); DOCS.pop((f"{AR}__ballots", "dup2"))
+
+# 3. VOID-AND-REISSUE MUST CARRY THE VOTER'S WEIGHT. Weight lives on the code
+# doc; a reissue that drops it silently demotes a weighted delegate to 1 —
+# changing the outcome of the election the void was meant to repair.
+_imp = c.post(f"/admin/api/polls/{AR}/voters/import", headers=hdr,
+              json={"members": [{"member_id": "AKW9", "weight": 7}]}).get_json()
+_wcode = _imp["created"][0]["code"]
+_wr = c.post(f"/p/{AR}/vote", json={"code": _wcode, "answers": AR_ANS})
+_vr = c.post(f"/p/{AR}/admin/void", headers=hdr,
+             json={"receipt": _wr.get_json()["receipt"], "reason": "technical_failure"})
+ok(_vr.status_code == 200, "void-and-reissue succeeds for the weighted voter")
+ok(DOCS[(f"{AR}__codes", vote_service.code_hash(_vr.get_json()["new_code"]))].get("weight") == 7,
+   "reissued code carries the voter's weight forward")
+
+# 4. PUBLISH FREEZES THE TALLY, so a provisional adjudicated afterwards would
+# never appear in the published result.
+DOCS[("pubguard__provisional", "PX")] = {"receipt": "PX", "status": "pending"}
+DOCS[("config__polls", "pubguard")] = {
+    "name": "Pub Guard", "finalized": True,
+    "questions": [{"key": "m", "type": "yesno", "title": "M"}]}
+vote_service.load_polls(force=True)
+_pg = c.post("/admin/api/polls/pubguard/publish", headers=hdr, json={"publish": True})
+ok(_pg.status_code == 409 and _pg.get_json()["error"] == "provisionals_pending",
+   "publish refuses while provisionals await adjudication")
+ok(c.post("/admin/api/polls/pubguard/publish", headers=hdr,
+          json={"publish": True, "force": True}).status_code == 200,
+   "publish proceeds with force:true (deliberate, audited)")
+
+# 5. CONFIG LOADING MUST NOT FAIL OPEN. On a Firestore blip, falling back to
+# the built-in demo seed would hand voters a DIFFERENT ballot for the same
+# poll_id; and "every poll archived" must not resurrect the demo chapters.
+_live = vote_service.load_polls(force=True)
+_realdb = vote_service.db
+class _DeadDB:
+    def collection(self, _n):
+        raise RuntimeError("firestore down")
+vote_service.db = _DeadDB()
+ok(vote_service.load_polls(force=True) is _live,
+   "Firestore outage keeps the last-good config, never the demo seed")
+vote_service.db = _realdb
+_saved = dict(DOCS)
+for _k in [k for k in DOCS if k[0] == "config__polls"]:
+    DOCS[_k] = dict(DOCS[_k], archived=True)
+ok(vote_service.load_polls(force=True) == {},
+   "all-archived means no polls — it does not fall back to the CHAPTERS seed")
+DOCS.clear(); DOCS.update(_saved)
+vote_service.load_polls(force=True)
+
+# 6. MANIFEST CSV. member_id/chapter come from an uploaded roll: an unquoted
+# comma shifts every later column (a code lands on the wrong member), and a
+# leading '=' executes when staff open the manifest in Excel or Sheets.
+_mf = vote_service._manifest_csv([{"member_id": "=cmd|'/c calc'!A1",
+                                   "chapter": "Boston, MA", "weight": 1,
+                                   "code": "abc", "vote_link": "https://v"}])
+ok(_mf.splitlines()[1].startswith("\"'=cmd") and '"Boston, MA"' in _mf.splitlines()[1],
+   "manifest CSV neutralizes formulas and quotes embedded commas")
+
+# 7. THE UNAUTHENTICATED WRITE PATH IS THROTTLED — otherwise a script buries
+# the adjudication queue in junk that staff must hand-review.
+vote_service._prov_hits.clear()
+_st = [c.post(f"/p/{AR}/provisional", json={"info": info, "answers": AR_ANS}).status_code
+       for _ in range(vote_service.PROV_MAX_PER_IP + 2)]
+ok(_st.count(200) == vote_service.PROV_MAX_PER_IP and _st[-1] == 429,
+   "provisional submissions are rate-limited per IP")
+vote_service._prov_hits.clear()
+
+# 8. REQUEST BODY CAP — an unauthenticated POST can't stream unbounded JSON
+# that the app buffers and parses before any validation runs.
+ok(vote_service.app.config["MAX_CONTENT_LENGTH"] == 8 * 1024 * 1024,
+   "request bodies are capped")
+ok(c.post(f"/p/{AR}/vote", data=b"x" * (9 * 1024 * 1024),
+          content_type="application/json").status_code == 413,
+   "an oversized body is rejected before parsing")
+
+# 9. IMPORTS ARE BATCHED — one round trip per document cannot finish a 20k
+# roll inside the request deadline. (FakeBatch asserts Firestore's 500-op cap.)
+_big = c.post(f"/admin/api/polls/{AR}/voters/import", headers=hdr,
+              json={"members": [{"member_id": f"BULK{i}"} for i in range(900)]})
+ok(_big.status_code == 200 and len(_big.get_json()["created"]) == 900,
+   "a 900-member import commits in batches")
 
 print(f"SMOKE TEST: all {passed} checks passed")

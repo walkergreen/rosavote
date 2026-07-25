@@ -39,8 +39,9 @@ python3 tools/dev_server.py       # http://localhost:8080
 
 # syntax-check the template's inline JS after editing it:
 python3 -c "import re; open('/tmp/t.js','w').write(re.search(r'<script>(.*)</script>', open('ballot_template.html').read(), re.S).group(1).replace('__Q7_NAMES__','{}'))" && node --check /tmp/t.js
-# (this machine has no node — loading the page in a browser and checking the
-# console for errors is the fallback; same applies to admin_console.html)
+# (node lives at /opt/node22/bin/node on this machine; if it's ever missing,
+# loading the page and checking the console is the fallback. Same for
+# admin_console.html — extract every <script> block, then --check it.)
 
 # tabulation accuracy: regression over real BLT election files + live replay:
 python3 tools/blt_regression.py            # 40 real elections + 2 score/STAR fixtures, deterministic, 0 errors
@@ -191,7 +192,8 @@ regardless of window and refuse builder edits without an explicit
 ## Data model (Firestore, per poll_id)
 
 - `{poll}__codes` — key = SHA-256(code). `used`, `member_id`, `chapter`,
-  optional `reissued_from`. Repeatable per-chapter TEST codes live in
+  optional `reissued_from`, optional `weight` (carried across a reissue).
+  Repeatable per-chapter TEST codes live in
   `CHAPTERS[..]["test_code"]`, handled in code, never stored, never recorded.
 - `{poll}__ballots` — IDENTITY-LINKED (member_id, chapter, code_hash, comment)
   answers EXCEPT q7. Visible to admins + the voter's own chapter.
@@ -199,6 +201,22 @@ regardless of window and refuse builder edits without an explicit
   receipt, code_hash only (admin troubleshooting trace). ADMIN-ONLY; chapters
   never get access. Both ballot docs carry receipt/nonce/record_hash and a
   `voided` flag (never delete; excluded from tallies, kept in chain).
+  **KNOWN LIMIT — secrecy is PSEUDONYMITY, not unlinkability.** The secret
+  doc keeps TWO join keys back to the voter: the shared `receipt` (paired
+  with `{poll}__ballots.receipt` → member_id) and `code_hash` (paired with
+  `{poll}__codes` → member_id). Anyone holding raw database access — a
+  Firestore export, a PITR restore, a broad IAM grant — can therefore
+  de-anonymize every delegate ranking. No API exposes the join (the console's
+  lookup returns only recorded-yes/no), so the guarantee currently rests on
+  IAM discipline rather than the data model. Closing it is a policy decision,
+  not a refactor: dropping `code_hash` costs the documented troubleshooting
+  trace, and dropping `receipt` costs the `secret_ballot_recorded` check.
+  Decide before any real delegate election.
+- Receipts are 64-bit (`new_receipt()`, 16 chars; provisionals `P`+56-bit).
+  The receipt is the lookup key for `verify`, `void`, and the published
+  `ballots.csv`, and the PROVISIONAL receipt is a document id — the old
+  32/28-bit receipts collided at chapter scale. Short legacy receipts still
+  validate and resolve; `void` refuses a receipt matching >1 ballot.
 - `{poll}__provisional` — sealed self-serve provisionals (name, all emails,
   phones, chapter, join date, alt names + full answers) pending adjudication.
 - `{poll}__audit_log` — append-only admin actions (void_reissue,
@@ -243,6 +261,26 @@ verification instructions.
   page inherits the delegate window.
 - Cost model on splash: SMS $0.0125/segment, email-first, two shrinking SMS
   reminder waves, postcards for no-email/no-phone tier. Realistic ~$2–5k.
+
+## Invariants worth not breaking
+
+- **A cast vote is ONE transaction.** `_cast_txn` burns the code AND writes
+  both ballot docs together. Splitting them (burn, then write) means any
+  failure in between leaves a used code with no ballot: the voter is
+  disenfranchised and cannot retry, because their code now reads as voted.
+  `_write_ballot_docs(..., txn=)` exists for exactly this; provisional
+  promotion uses the same seam via `_promote_txn`.
+- **`load_polls` fails CLOSED.** On a Firestore error it serves the last-good
+  cached config, never the `CHAPTERS` demo seed — falling back mid-election
+  would hand voters a different ballot (demo questions, demo test codes) for
+  the same poll_id. Only a completely unseeded collection uses the seed;
+  "every poll archived" legitimately means zero polls.
+- **Any read-modify-write of a config doc starts at `_fresh_cfg_doc()`**, not
+  `chapter_or_none()`. The latter is a 60s cache; writing it back rewrites
+  the whole document from a stale copy and reverts a concurrent builder save.
+- **Bulk Firestore writes go through `db.batch()`** (`BATCH_SIZE` 400, hard
+  cap 500). A round trip per document cannot finish a 20k roll — never mind
+  the 200k server-side cap — inside the Cloud Run request deadline.
 
 ## Gotchas
 
