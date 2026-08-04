@@ -359,6 +359,19 @@ def canon_answers(a: dict) -> str:
     """Deterministic serialization — MUST match tools/verify.py + build_chain.py."""
     return json.dumps(a, separators=(",", ":"), sort_keys=True)
 
+
+def _js_json(obj) -> str:
+    """json.dumps hardened for embedding inside an inline <script> element.
+    HTML parsing beats JS parsing, so a bare "</script>" (or a stray "<") in
+    any string value — e.g. an admin-set candidate name or question title —
+    would end the script element and let following markup execute. Escape the
+    characters that can break out of the element or the JS string so the blob
+    is inert as markup but still valid JSON/JS."""
+    return (json.dumps(obj)
+            .replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
 # ---- chapter registry (FALLBACK SEED) -------------------------------------
 # Served only until config__polls is seeded in Firestore (tools/seed_config.py);
 # after that, load_polls() below is the source of truth. poll_id -> config.
@@ -803,11 +816,16 @@ def render_ballot(poll_id: str, cfg: dict, code: str = "") -> str:
                      "required": q.get("required", q["type"] in ("yesno", "ranked", "score"))})
 
     html = TEMPLATE.replace("__POLL_ID__", poll_id)
-    html = html.replace("__CHAPTER_NAME__", cfg["name"])
+    # cfg["name"] is admin-set config, reflected into text, a <title>, AND an
+    # attribute (value="__CHAPTER_NAME__") — escape so a name with a quote or
+    # angle bracket can't break out of any of those contexts.
+    html = html.replace("__CHAPTER_NAME__", _esc(cfg["name"]))
     from urllib.parse import quote
     html = html.replace("__HELP_SUBJECT__", quote(f"[BALLOT26] {cfg['name']} — Can't find my code"))
     html = html.replace("__QUESTIONS_HTML__", "".join(parts))
-    html = html.replace("__QDEF__", json.dumps(qdef))
+    # QDEF carries admin-set titles/candidate names into an inline <script>;
+    # _js_json keeps a "</script>" in any of them from ending the element.
+    html = html.replace("__QDEF__", _js_json(qdef))
     html = html.replace("__N_Q__", str(total))
     html = html.replace("__CODE__", code if CODE_RE.match(code or "") else "")
     return html
@@ -2172,12 +2190,15 @@ def index():
     if host in MARKETING_HOSTS:
         return Response(_marketing_doc(), mimetype="text/html")
     polls = load_polls()
-    links = "".join(f'<li><a href="/p/{pid}/">{cfg["name"]}</a></li>' for pid, cfg in polls.items())
+    # pid matches POLL_ID_RE and test_code matches CODE_RE (both safe charsets),
+    # but cfg["name"] is free-form admin text — escape it into the link markup.
+    links = "".join(f'<li><a href="/p/{pid}/">{_esc(cfg["name"])}</a></li>'
+                    for pid, cfg in polls.items())
     rows = "".join(
-        f'<p style="margin:0 0 4px"><b>{cfg["name"]}</b><br/>'
-        f'<code class="tc" style="font-size:.86rem">{cfg["test_code"]}</code></p>'
+        f'<p style="margin:0 0 4px"><b>{_esc(cfg["name"])}</b><br/>'
+        f'<code class="tc" style="font-size:.86rem">{_esc(cfg["test_code"])}</code></p>'
         f'<a class="btn" style="min-height:40px;font-size:1.05rem;margin:6px 0 14px" '
-        f'href="/p/{pid}/v/{cfg["test_code"]}">Open {cfg["name"]} ballot with test code &rarr;</a>'
+        f'href="/p/{pid}/v/{cfg["test_code"]}">Open {_esc(cfg["name"])} ballot with test code &rarr;</a>'
         for pid, cfg in polls.items() if cfg.get("test_code")
     )
     html = (SPLASH.replace("__TEST_ROWS__", rows).replace("__CHAPTER_LINKS__", links)
@@ -3624,6 +3645,14 @@ def admin_export_blt(poll_id, qkey):
     if not q or q["type"] not in ("ranked", "yesno"):
         return jsonify({"error": "not_exportable",
                         "message": "only ranked and yesno questions export as BLT"}), 404
+    # Decided policy: the secret-ballot collection (delegate rankings) is
+    # national-only — chapters get their delegation *result*, never the raw
+    # rankings. Gate the raw-ballot export so a chapter token can't pull the
+    # anonymized-but-complete secret ballots.
+    if q_visibility(q) == "secret" and ident["role"] != "national":
+        return jsonify({"error": "forbidden_secret",
+                        "message": "secret-ballot contests export only for national "
+                                   "admins"}), 403
     main_rows, _, secret_rows = _tally_rows(poll_id)
     if q["type"] == "yesno":
         options = _yesno_options(dict(q, allow_abstain=False))
@@ -3809,6 +3838,12 @@ def admin_export_zip(poll_id):
                    f" — results</title>{body}")
         for q in poll_questions(cfg):
             if q["type"] not in ("ranked", "yesno"):
+                continue
+            # secret-ballot raw rankings are national-only (decided policy);
+            # a chapter's package omits them (it still gets its result set).
+            # q_visibility (not the derived `secret` flag) so a config written
+            # straight to Firestore with visibility:"secret" can't slip past.
+            if q_visibility(q) == "secret" and ident["role"] != "national":
                 continue
             key = q["key"]
             if q["type"] == "yesno":
