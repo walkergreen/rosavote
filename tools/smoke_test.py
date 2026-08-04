@@ -981,6 +981,25 @@ ok("cached" not in c.get("/admin/api/polls/special_ref/results?fresh=1",
 ok("Official Results" in c.get("/p/special_ref/results").data.decode(),
    "public page renders from the frozen cache")
 
+# ---- secret-ballot raw exports are national-only (chapters get the result,
+# never the raw delegate rankings) ----
+sr_tok = "sr-chapter-token-777"
+DOCS[("config__admins", hashlib.sha256(sr_tok.encode()).hexdigest())] = {
+    "name": "Special-ref Chapter", "role": "chapter", "polls": ["special_ref"],
+    "active": True}
+sr_hdr = {"X-Admin-Token": sr_tok}
+ok(c.get("/admin/api/polls/special_ref/blt/officer", headers=sr_hdr).status_code == 403,
+   "chapter admin denied the secret contest's raw BLT")
+ok(c.get("/admin/api/polls/special_ref/blt/measure", headers=sr_hdr).status_code == 200,
+   "chapter admin can still export a non-secret contest")
+ok(c.get("/admin/api/polls/special_ref/blt/officer", headers=hdr).status_code == 200,
+   "national admin still exports the secret contest")
+import io as _io2, zipfile as _zip2  # noqa: E402
+_srzip = c.get("/admin/api/polls/special_ref/export.zip", headers=sr_hdr)
+_srnames = set(_zip2.ZipFile(_io2.BytesIO(_srzip.data)).namelist())
+ok("officer.blt" not in _srnames and "measure.blt" in _srnames,
+   "chapter export package omits the secret contest's raw ballots")
+
 # ---- official Meek STV contests (YDSA delegate elections) ----
 YDSA_QS = [{"key": "dels", "type": "ranked", "title": "Elect 2 YDSA delegates",
             "seats": 2, "method": "meek",
@@ -1434,5 +1453,18 @@ ok(c.get(f"/p/{RC}/rollcall/motion.csv").status_code == 409
    and c.get(f"/p/{RC}/verify/officers.blt").status_code == 409,
    "roll call and secret BLT publish only after finalize + publish")
 
+# ---- config strings can't break out of the ballot HTML/JS (stored XSS) ----
+_evil = '</script><img src=x onerror=alert(1)>"'
+_evilcfg = {"name": _evil, "opens_at": None, "closes_at": None, "questions": [
+    {"key": "q1", "type": "ranked", "title": _evil, "seats": 1, "alternates": 0,
+     "options": [{"id": "AA", "name": _evil, "sub": ""}]}]}
+_page = vote_service.render_ballot("xss_demo", _evilcfg, "")
+_qdef_blob = _page.split("var QDEF=")[1].split(";", 1)[0]
+ok("<img src=x" not in _page and "</script><img" not in _page,
+   "hostile config never appears as live markup in the ballot page")
+ok("</script>" not in _qdef_blob and "\\u003c" in _qdef_blob,
+   "QDEF JSON neutralizes angle brackets so it can't close its <script>")
+ok('value="</script>' not in _page and 'value="&lt;/script&gt;' in _page,
+   "chapter name is HTML-escaped in the attribute context")
 
 print(f"SMOKE TEST: all {passed} checks passed")
