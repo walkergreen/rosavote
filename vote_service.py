@@ -1612,7 +1612,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
         the top of this page are voting codes, not admin tokens</b> &mdash;
         they open ballots, never the console. <b>National (root) token:</b>
         held in Secret Manager as <code>ballot-admin-token</code> in the
-        <code>dsa-org-tools</code> project &mdash; staff with project access
+        <code>rosavote-app</code> project &mdash; operators with project access
         retrieve it via
         <code>gcloud secrets versions access latest --secret ballot-admin-token</code>.
         <b>Chapter tokens:</b> minted by national staff
@@ -3961,8 +3961,8 @@ _LEGAL_SHELL = _LEGAL_SHELL.replace("__SOURCE_URL__", SOURCE_URL)
 TERMS_BODY = """
 <h2>What this service is</h2>
 <p>RosaVote is open-source ranked-choice and STV election software
-(AGPL-3.0, © 2026 Walker Green). This deployment is operated by the
-Democratic Socialists of America's staff for chapter and national votes:
+(AGPL-3.0, © 2026 Walker Green). This deployment is operated by RosaVote
+as an independent service for organizations that run their votes here:
 ballots, voter codes, tabulation, and results. Using a voting code, casting
 a ballot, or administering an election here means you accept these terms.</p>
 <h2>Acceptable use</h2>
@@ -3986,45 +3986,66 @@ the service's version history.</p>
 """
 
 PRIVACY_BODY = """
-<h2>What we collect</h2>
-<p><b>Voters:</b> your ballot answers, a receipt code, timestamps, and — for
-named sections — your member ID and chapter, exactly as disclosed on the
-ballot above Question 1. Secret-ballot questions (such as convention
-delegates) are stored with no name and no chapter. Voting codes are stored
-only as SHA-256 hashes. Provisional ballots additionally hold the contact
-details you provide, sealed until adjudication.</p>
+<p><b>RosaVote runs elections without keeping a file on you.</b> This page
+says what the system stores, what it never stores, and who touches data on
+the way through. It's short because the honest answer is short.</p>
+<p><i>Effective August 4, 2026. Contact: support@rosavote.org.</i></p>
+<h2>Who does what</h2>
+<p>RosaVote is an independent open-source project (AGPL-3.0) operated by
+Walker Green. It is not affiliated with DSA or any organization that votes
+here. The organization running an election supplies the voter roll and owns
+it. RosaVote hosts and processes that roll for one purpose: running the
+election. If an organization runs its own copy of the software instead, that
+organization is the data controller for its deployment.</p>
+<h2>What we store</h2>
+<p>Less than you'd guess. A one-time voting code for each eligible voter,
+stored only as a SHA-256 hash: we can check a code, we can't recover one.
+Attached to that hash: a member ID number, a chapter, and a vote weight.
+That's the whole voter record.</p>
+<p>Ballots depend on the section type, and the ballot itself discloses which
+is which above Question 1. Secret-ballot questions (such as convention
+delegates) are stored with no name and no chapter. Named sections store your
+answers with your member ID and chapter, exactly as disclosed. Provisional
+ballots additionally hold the contact details you provide, sealed until
+adjudication. Every administrative action lands in an append-only audit log
+with the admin's name.</p>
+<h2>What we don't store</h2>
+<p>No voter names, emails, phone numbers, or addresses in the voter records
+(the one exception is sealed provisional contact info, above). When an
+organization sends ballot links by email or text, the contact info passes
+through at send time and is not kept. Those sends go through Mailgun, Twilio,
+or Scale to Win, depending on the organization's setup. Each has its own
+privacy policy worth reading.</p>
 <h2>Who can see what</h2>
 <p>Named answers: election administrators and your own chapter's admins.
-Secret-ballot rankings: no one by name — administrators can only trace a
-specific record for troubleshooting, under audit. National does not publish a
-chapter's results; each chapter decides its own publication (never
-secret-ballot rankings). Every administrative action is written to an
-append-only audit log.</p>
-<h2>What we don't do</h2>
-<p>We do not sell or share member data, run ads, use tracking pixels or
-third-party analytics, or send messages from this service. Election reminders
-go through DSA's existing communication platforms.</p>
-<h2>Where data lives — and who holds it</h2>
-<p>All election data is stored in and controlled by the <b>Democratic
-Socialists of America</b>, inside DSA's own Google Cloud project
-(<code>dsa-org-tools</code>) alongside DSA's membership data warehouse — the
-same infrastructure DSA staff already operate. The author of the RosaVote
-software (Walker Green) does <b>not</b> host, receive, or have access to your
-ballots, contacts, or any election data; the code is open source (AGPL-3.0)
-but the data belongs to DSA. (RosaVote itself is an independent open-source
-project, not an official DSA system — this deployment simply runs on DSA
-infrastructure for DSA elections; any organization can host its own.) Data is processed only to run the election:
-eligibility, one-member-one-vote, tabulation, auditing, and the
-tamper-evidence chain. Ballot records are retained by DSA as the permanent
-election record; voided ballots are flagged, never deleted. If a chapter or
-national committee runs its own copy of the software, that body — not the
-author — is the data controller for its deployment.</p>
-<h2>Verification</h2>
-<p>Your receipt code lets you confirm your ballot was stored
-(<code>/p/&lt;poll&gt;/verify</code>) without revealing content. Exported
-ballot files are anonymous.</p>
-<h2>Contact</h2>
-<p>Questions or concerns: support@rosavote.org.</p>
+Secret-ballot rankings: no one by name. Administrators can trace a specific
+record only for troubleshooting, under audit. Each organization decides its
+own publication, and secret-ballot rankings are never published by name.</p>
+<h2>Ballot secrecy and verification</h2>
+<p>Your receipt code confirms your ballot was stored
+(<code>/p/&lt;poll&gt;/verify</code>) without revealing its content. Anyone
+can download the anonymized ballots and re-run the tally. That's the point of
+the project: you shouldn't have to trust us, and the data model is built so
+you don't have to.</p>
+<h2>Where it runs</h2>
+<p>Google Cloud, in the United States, in RosaVote's own project. Like every
+web server, ours writes standard request logs (IP address, browser type,
+timestamps). Backups are point-in-time recovery with a 7-day window; nothing
+lives in backups longer than that.</p>
+<h2>Selling and sharing</h2>
+<p>We don't sell data. We don't share it. No ads, no tracking pixels, no
+third-party analytics.</p>
+<h2>Retention and deletion</h2>
+<p>Ballot records are kept as the organization's permanent election record,
+and voided ballots are flagged rather than silently deleted. When the
+organization deletes an election, or asks us to, its data goes with it;
+backups age out within 7 days. If you're a voter with a question about your
+data, start with the organization that ran your election, since they own the
+roll. You can also write support@rosavote.org.</p>
+<h2>The demo</h2>
+<p>The demo deployment uses publicly available data. Sample ballots use
+historical figures and published convention materials, and living people's
+surnames are abbreviated.</p>
 """
 
 
