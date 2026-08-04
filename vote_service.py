@@ -1803,10 +1803,10 @@ SPLASH = """<!doctype html><html lang="en"><head>
         (See the fuller <a href="/vs-opavote">side-by-side</a>.)</p>
         <p><b>More affordable at our scale.</b> OpaVote prices per voter, per election
         (about $0.08/voter) &mdash; reasonable for one vote, but it multiplies across every
-        chapter running its own election. This app runs on cloud DSA already operates, so the
+        chapter running its own election. This app can run on cloud infrastructure DSA already operates (as this deployment does), so the
         marginal cost of an election is a fraction of a vendor fee; message delivery
         (SMS/postcards) is the main variable, and that's an add-on either way.</p>
-        <p><b>Built for DSA's ballots.</b> Because it's ours to shape, this app bakes in what
+        <p><b>Built for DSA's ballots.</b> Because it's open source and free to shape, this app bakes in what
         OpaVote can only handle by hand: codes generated straight from the deduplicated
         membership roll (no list uploads), multi-section ballots with per-section visibility
         (named poll votes beside a secret delegate ballot on one page), diversity-quota
@@ -1816,10 +1816,11 @@ SPLASH = """<!doctype html><html lang="en"><head>
         <p><b>Verifiable and owned.</b> Same trusted Scottish STV math (OpaVote's descends
         from OpenSTV; ours implements the same statute, reading the same BLT files), but this
         app adds per-voter receipts and a public hash chain so members verify their own vote
-        and anyone can recount &mdash; and the code, the data, and the roadmap belong to DSA,
-        not a vendor. Ballots stay on DSA infrastructure instead of being deleted about 12
-        weeks after the election.</p>
-        <p><b>The trade.</b> DSA runs the infrastructure itself &mdash; IAM, audit logs,
+        and anyone can recount &mdash; and the code is open source while the data and
+        infrastructure stay under the control of the organization running the election,
+        not a vendor. Ballots are retained on its own terms instead of being deleted about
+        12 weeks after the election.</p>
+        <p><b>The trade.</b> The organization runs the infrastructure itself &mdash; IAM, audit logs,
         hardening, an accountable administrator &mdash; where OpaVote hands you a fully hosted
         service. That's real work, and it's the price of owning our own democratic
         infrastructure. For most elections at our scale, it's worth it.</p>
@@ -4010,7 +4011,9 @@ Socialists of America</b>, inside DSA's own Google Cloud project
 same infrastructure DSA staff already operate. The author of the RosaVote
 software (Walker Green) does <b>not</b> host, receive, or have access to your
 ballots, contacts, or any election data; the code is open source (AGPL-3.0)
-but the data belongs to DSA. Data is processed only to run the election:
+but the data belongs to DSA. (RosaVote itself is an independent open-source
+project, not an official DSA system — this deployment simply runs on DSA
+infrastructure for DSA elections; any organization can host its own.) Data is processed only to run the election:
 eligibility, one-member-one-vote, tabulation, auditing, and the
 tamper-evidence chain. Ballot records are retained by DSA as the permanent
 election record; voided ballots are flagged, never deleted. If a chapter or
@@ -4418,8 +4421,8 @@ _VS_ROWS = [
     ("Cost at DSA scale",
      "About $0.08 per voter, per election — reasonable for years, but it "
      "multiplies across 200+ chapters each running their own vote.",
-     "Runs on cloud DSA already operates — a fraction of the cost, at any "
-     "scale."),
+     "Can run on cloud infrastructure DSA already operates — a fraction of "
+     "the cost, at any scale."),
     ("Customization",
      "One general-purpose ballot template.",
      "Fully customizable: multi-section ballots, chapter-unique questions, "
@@ -4430,11 +4433,13 @@ _VS_ROWS = [
      "national + chapter-scoped admin built in."),
     ("Flexibility & control",
      "Proprietary and hosted — you work within its limits.",
-     "Open source (AGPL-3.0) — DSA owns the roadmap and can extend anything."),
+     "Open source (AGPL-3.0) — anyone can host, audit, or extend it; no "
+     "vendor lock-in."),
     ("Data ownership",
      "Ballots are hosted by the vendor and removed about 12 weeks after the "
      "election.",
-     "Ballots stay on DSA infrastructure, retained on DSA's own terms."),
+     "Ballots stay on infrastructure the organization controls, retained on "
+     "its own terms."),
     ("Voter verification",
      "Published results and a downloadable ballot file.",
      "Per-voter receipts, a public hash chain, and an in-browser verifier — "
@@ -4446,8 +4451,8 @@ _VS_ROWS = [
     ("Support & independence",
      "Commercial support and a neutral, third-party platform — a real plus "
      "for high-stakes or contested races.",
-     "DSA-maintained and extensible, with the whole movement able to "
-     "contribute."),
+     "Maintained by DSA members and open to contributions from the whole "
+     "movement."),
 ]
 
 
@@ -4472,14 +4477,15 @@ def _vs_opavote_html():
         f"<tbody>{rows}</tbody></table>"
         "<h2>What DSA gains</h2>"
         "<ul><li><b>Lower cost.</b> Elections run for a fraction of per-chapter "
-        "vendor fees, on cloud DSA already pays for.</li>"
+        "vendor fees, on cloud infrastructure DSA already pays for.</li>"
         "<li><b>Ballots that fit our bylaws.</b> Quotas, Article V timing, "
         "alternates and custom multi-section ballots — not workarounds bolted on "
         "the side.</li>"
         "<li><b>Real verifiability.</b> Members confirm their own vote and anyone "
         "can independently recount from a public hash chain.</li>"
-        "<li><b>Ownership.</b> DSA controls the code, the data, and the roadmap — "
-        "and the whole movement can improve it.</li></ul>"
+        "<li><b>Ownership.</b> The organization running the election controls its "
+        "data and infrastructure, and the code is open for anyone to audit, "
+        "host, or extend.</li></ul>"
         "<h2>When OpaVote still makes sense</h2>"
         "<p>OpaVote is a good partner, and no chapter is being pushed off it. For "
         "an especially high-stakes or contested election, some will prefer the "
