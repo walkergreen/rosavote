@@ -5,6 +5,10 @@ Socialists of America: ballots, voter codes, Scottish STV tabulation (with
 quota-constrained leadership counts), audited administration, and
 independently verifiable results.
 
+> **Disclaimer:** RosaVote is an independent open-source project built by DSA
+> members. It is **not affiliated with, endorsed by, or an official project of
+> the Democratic Socialists of America (DSA)** or of OpaVote.
+
 Flask + Firestore on Cloud Run. See `CLAUDE.md` for architecture and
 operations; `tools/smoke_test.py` runs the full offline test suite
 (no GCP credentials needed).

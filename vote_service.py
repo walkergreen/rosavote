@@ -1916,7 +1916,7 @@ SPLASH = """<!doctype html><html lang="en"><head>
   </div>
   <div class="marks" style="margin-top:18px"></div>
 </main>
-<footer><b>RosaVote</b> &middot; <a href="/about" style="color:inherit">About</a> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>support@rosavote.org</b><br/>Built with 🌹 by Walker Green</footer>
+<footer><b>RosaVote</b> &middot; <a href="/about" style="color:inherit">About</a> &middot; <a href="/terms" style="color:inherit">Terms</a> &middot; <a href="/privacy" style="color:inherit">Privacy</a> &middot; <a href="/methods" style="color:inherit">Methods</a> &middot; <a href="/vs-opavote" style="color:inherit">Why RosaVote</a> &middot; <a href="__SOURCE_URL__" style="color:inherit">Source (AGPL-3.0)</a><br/>Questions? Email <b>support@rosavote.org</b><br/>An independent open-source project &mdash; not affiliated with or endorsed by the Democratic Socialists of America (DSA)<br/>Built with 🌹 by Walker Green</footer>
 <script>
 (function(){
   var intro = document.getElementById("intro");
@@ -4464,7 +4464,7 @@ def _vs_opavote_html():
         "third-party platform adds trust.</p>"
         "<p><b>RosaVote is DSA's preferred alternative</b> going forward: stronger, "
         "more flexible, fully customizable, and more affordable — open source, "
-        "built by DSA and for DSA. We're not forcing a migration. Chapters choose "
+        "built by DSA members, for DSA. We're not forcing a migration. Chapters choose "
         "what fits each race; RosaVote is simply the better default for most of "
         "them.</p>"
         "<table class='vs'><thead><tr><th></th>"
@@ -4487,10 +4487,12 @@ def _vs_opavote_html():
         "and OpaVote remains an excellent choice for exactly that. RosaVote is the "
         "preferred default everywhere else, and it's here whenever a chapter is "
         "ready.</p>"
-        "<p class='fine' style='margin-top:14px'>Not affiliated with or endorsed "
-        "by OpaVote; OpaVote is a trademark of its owners. Descriptions here "
-        "reflect OpaVote's public pricing/documentation and its June 2026 DSA case "
-        "study, and corrections are welcome via the source repository.</p>")
+        "<p class='fine' style='margin-top:14px'>RosaVote is an independent "
+        "open-source project — not affiliated with or endorsed by the Democratic "
+        "Socialists of America (DSA) or by OpaVote; OpaVote is a trademark of its "
+        "owners. Descriptions here reflect OpaVote's public pricing/documentation "
+        "and its June 2026 DSA case study, and corrections are welcome via the "
+        "source repository.</p>")
     extra = ("<style>table.vs{{border-collapse:collapse;width:100%;margin:8px 0 4px;"
              "font-size:.9rem}}table.vs th,table.vs td{{border:1px solid #000;"
              "padding:8px 10px;text-align:left;vertical-align:top}}"
