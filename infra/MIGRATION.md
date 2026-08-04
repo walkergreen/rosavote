@@ -1,5 +1,11 @@
 # RosaVote — migration off DSA infrastructure
 
+> **STATUS: EXECUTED 2026-08-04.** Data migrated (24 collections, counts
+> verified), domains cut over, DSA-side resources torn down. Deviations from
+> the plan below: service named `rosavote` (not member-ballot-v3); production
+> data WAS migrated per owner decision (vendor framing), then purged from DSA's
+> GCP; living candidates' surnames abbreviated in demo data.
+
 Move everything from **`dsa-org-tools`** (DSA's GCP project) to a dedicated
 project owned by **cliffwgreen@gmail.com**. After this, DSA's only remaining
 tie to RosaVote is optional data *import* (CSV/GCS), not hosting.

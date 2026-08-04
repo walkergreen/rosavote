@@ -1,19 +1,20 @@
 # DSA Chapter Member Ballot (ballot-v2)
 
 Code-authenticated, multi-chapter membership ballot for ~120k voters.
-Flask + Firestore on Cloud Run (project `dsa-org-tools`, region `us-east1`,
-service `member-ballot-v2`). Built by DSA Staff's Data & Tech Department.
+Flask + Firestore on Cloud Run (project `rosavote-app`, region `us-east1`,
+service `rosavote`) — an independent open-source project, migrated off DSA
+infrastructure 2026-08-04 (see infra/MIGRATION.md).
 Prototype status: deployed publicly for review; NOT a live election.
 
 ## Run / deploy / test
 
 ```sh
-# deploy (from this directory's parent) — current service is member-ballot-v3:
-gcloud run deploy member-ballot-v3 --source ballot-v2 --region us-east1 \
+# deploy (from the repo root) — service `rosavote` in project `rosavote-app`:
+gcloud run deploy rosavote --source . --project rosavote-app --region us-east1 \
+  --service-account rosavote-run@rosavote-app.iam.gserviceaccount.com \
   --allow-unauthenticated --min-instances 0 --max-instances 20 \
   --set-secrets ADMIN_TOKEN=ballot-admin-token:latest
-# live: https://member-ballot-v3-62155002849.us-east1.run.app
-# (member-ballot-v2 + older services are previous prototypes — deletion candidates)
+# live: https://rosavote-700989028375.us-east1.run.app (rosavote.org / app.rosavote.org)
 # STAGING: ./deploy-staging.sh (service rosavote-staging, own Firestore db+token).
 #   Domain/edge/DDoS: infra/STAGING_AND_EDGE.md + infra/cloud-armor.sh
 # ENV VARS: ADMIN_TOKEN; FIRESTORE_DATABASE (named db for staging isolation;
@@ -53,7 +54,7 @@ python3 tools/seed_config.py admin --name "NYC admins" --role chapter --polls de
 ```
 
 There is no build step. The Dockerfile serves `vote_service.py` + template via
-gunicorn. Firestore Native mode already exists in `dsa-org-tools`. Cloud Run runs as the least-privilege SA `rosavote-run@dsa-org-tools.iam.gserviceaccount.com` (datastore.user + secretAccessor on ballot-admin-token + bigquery.jobUser; NOT the default Editor SA — deploy with `--service-account`). Firestore PITR is on (7-day). Admin HTML is sanitized (`sanitize_html`); CSP + security headers on every response.
+gunicorn. Firestore Native lives in `rosavote-app` (us-east1). Cloud Run runs as the least-privilege SA `rosavote-run@rosavote-app.iam.gserviceaccount.com` (datastore.user + secretAccessor on ballot-admin-token; NO BigQuery role — the import_bigquery admin feature is intentionally degraded off DSA infra; use CSV/GCS import). Firestore PITR is on (7-day). Admin HTML is sanitized (`sanitize_html`); CSP + security headers on every response.
 
 ## Files
 

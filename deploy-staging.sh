@@ -17,7 +17,7 @@
 # Run from the repo root (the dir that CONTAINS ballot-v2), like the prod deploy.
 set -euo pipefail
 
-PROJECT="${PROJECT:-dsa-org-tools}"
+PROJECT="${PROJECT:-rosavote-app}"
 REGION="${REGION:-us-east1}"
 SERVICE="${SERVICE:-rosavote-staging}"
 SOURCE="${SOURCE:-ballot-v2}"
