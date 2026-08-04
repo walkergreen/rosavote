@@ -1,7 +1,8 @@
 # RosaVote
 
-Code-authenticated, multi-chapter election infrastructure for the Democratic
-Socialists of America: ballots, voter codes, Scottish STV tabulation (with
+Code-authenticated, multi-chapter election infrastructure for democratic
+membership organizations — built around the rules DSA chapters actually use:
+ballots, voter codes, Scottish STV tabulation (with
 quota-constrained leadership counts), audited administration, and
 independently verifiable results.
 

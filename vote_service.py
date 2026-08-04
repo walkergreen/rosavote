@@ -1568,10 +1568,10 @@ SPLASH = """<!doctype html><html lang="en"><head>
     </g>
   </svg>
   <div class="wordmark">RosaVote</div>
-  <div class="tagline">Democratic Socialists of America</div>
+  <div class="tagline">Independent open-source election platform</div>
 </div>
 <header class="band"><div class="band-in">
-  <div class="wm">RosaVote<small>Chapter Member Ballot &middot; Democratic Socialists of America</small></div>
+  <div class="wm">RosaVote<small>Member Ballot Demo &middot; Independent &amp; open source</small></div>
   <a class="rose" href="/" aria-label="RosaVote home"><img src="/logo.svg" alt="" width="34" height="34"/></a>
 </div></header>
 <main>
@@ -4488,15 +4488,16 @@ def _vs_opavote_html():
         "that has run our elections for years, and it stays a solid choice, "
         "especially for high-stakes or contested races where an independent "
         "third-party platform adds trust.</p>"
-        "<p><b>RosaVote is DSA's preferred alternative</b> going forward: stronger, "
+        "<p><b>RosaVote is an independent, open-source alternative</b>: stronger, "
         "more flexible, fully customizable, and more affordable — open source, "
-        "built by DSA members, for DSA. We're not forcing a migration. Chapters choose "
+        "built by DSA members, for DSA-style elections. Nothing forces a migration — "
+        "chapters choose "
         "what fits each race; RosaVote is simply the better default for most of "
         "them.</p>"
         "<table class='vs'><thead><tr><th></th>"
         "<th>OpaVote</th><th class='rv'>RosaVote</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
-        "<h2>What DSA gains</h2>"
+        "<h2>What chapters gain</h2>"
         "<ul><li><b>Lower cost.</b> Elections run for a fraction of per-chapter "
         "vendor fees, on cloud infrastructure DSA already pays for.</li>"
         "<li><b>Ballots that fit our bylaws.</b> Quotas, Article V timing, "
@@ -4508,7 +4509,7 @@ def _vs_opavote_html():
         "data and infrastructure, and the code is open for anyone to audit, "
         "host, or extend.</li></ul>"
         "<h2>When OpaVote still makes sense</h2>"
-        "<p>OpaVote is a good partner, and no chapter is being pushed off it. For "
+        "<p>OpaVote is a good partner, and nothing pushes a chapter off it. For "
         "an especially high-stakes or contested election, some will prefer the "
         "independence of a neutral, third-party vendor with commercial support — "
         "and OpaVote remains an excellent choice for exactly that. RosaVote is the "
