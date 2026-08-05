@@ -10,125 +10,14 @@ Run from the ballot-v2 directory (or anywhere; it fixes sys.path itself).
 
 import os
 import sys
-import types
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("ADMIN_TOKEN", "smoke-test-token")
 
-# ---- Firestore stub ------------------------------------------------------
-DOCS = {}      # (collection, key) -> dict
-WRITES = []
+# GCP stubs live in tools/_stubs.py so smoke_test and security_test share one
+# fake implementation and can't drift apart.
+from _stubs import DOCS, WRITES, GCS, BQ_ROWS, FakeRef, FakeSnap  # noqa: E402,F401
 
-
-class FakeSnap:
-    def __init__(self, ref, d, exists=True):
-        self.reference = ref
-        self.id = ref.key
-        self.exists = exists
-        self._d = d or {}
-    def to_dict(self):
-        return dict(self._d)
-    def get(self, field):
-        return self._d.get(field)
-
-
-class FakeRef:
-    def __init__(self, coll, key):
-        self.coll, self.key = coll, key
-    def get(self, transaction=None):
-        d = DOCS.get((self.coll, self.key))
-        return FakeSnap(self, d, exists=d is not None)
-    def set(self, d):
-        DOCS[(self.coll, self.key)] = dict(d)
-        WRITES.append((self.coll, d))
-    def update(self, d):
-        DOCS[(self.coll, self.key)].update(d)
-    def delete(self):
-        DOCS.pop((self.coll, self.key), None)
-
-
-class FakeQuery:
-    def __init__(self, coll, field, val):
-        self.coll, self.field, self.val = coll, field, val
-    def stream(self):
-        for (coll, key), d in list(DOCS.items()):
-            if coll == self.coll and d.get(self.field) == self.val:
-                yield FakeSnap(FakeRef(coll, key), d)
-
-
-class FakeColl:
-    def __init__(self, name):
-        self.name = name
-    def document(self, k=None):
-        return FakeRef(self.name, k or f"auto{len(DOCS)}")
-    def where(self, field, op, val):
-        return FakeQuery(self.name, field, val)
-    def stream(self):
-        for (coll, key), d in list(DOCS.items()):
-            if coll == self.name:
-                yield FakeSnap(FakeRef(coll, key), d)
-
-
-class FakeTxn:
-    """Transaction handle. Applies writes immediately — enough to exercise the
-    call shape (all reads before writes, ballot + code burn issued together);
-    real atomicity is Firestore's job."""
-    def set(self, ref, d):
-        ref.set(d)
-    def update(self, ref, d):
-        ref.update(d)
-
-
-class FakeBatch:
-    def __init__(self):
-        self.ops = []
-    def set(self, ref, d):
-        self.ops.append((ref, d))
-    def commit(self):
-        if len(self.ops) > 500:
-            raise AssertionError("Firestore rejects a WriteBatch over 500 ops")
-        for ref, d in self.ops:
-            ref.set(d)
-        self.ops = []
-
-
-fake_fs = types.ModuleType("google.cloud.firestore")
-fake_fs.Client = lambda *a, **k: types.SimpleNamespace(
-    collection=lambda nm: FakeColl(nm), transaction=lambda: FakeTxn(),
-    batch=lambda: FakeBatch())
-fake_fs.SERVER_TIMESTAMP = "TS"
-fake_fs.transactional = lambda f: f
-fake_exc = types.ModuleType("google.api_core.exceptions")
-fake_exc.Aborted = type("Aborted", (Exception,), {})
-
-# BigQuery stub: returns a tiny fixed roll for any query
-BQ_ROWS = [{"member_id": "AK777001"}, {"member_id": "AK777002"}]
-fake_bq = types.ModuleType("google.cloud.bigquery")
-fake_bq.Client = lambda *a, **k: types.SimpleNamespace(
-    query=lambda q, job_config=None: types.SimpleNamespace(result=lambda: list(BQ_ROWS)))
-fake_bq.QueryJobConfig = lambda **k: None
-fake_bq.ScalarQueryParameter = lambda *a, **k: None
-
-# Cloud Storage stub: (bucket, path) -> text
-GCS = {}
-class FakeBlob:
-    def __init__(self, bucket, path):
-        self.bucket, self.path = bucket, path
-    def download_as_text(self):
-        return GCS[(self.bucket, self.path)]
-    def upload_from_string(self, data, content_type=None):
-        GCS[(self.bucket, self.path)] = data
-fake_storage = types.ModuleType("google.cloud.storage")
-fake_storage.Client = lambda *a, **k: types.SimpleNamespace(
-    bucket=lambda name: types.SimpleNamespace(
-        blob=lambda path, _n=name: FakeBlob(_n, path)))
-
-gcloud = types.ModuleType("google.cloud")
-gcloud.firestore = fake_fs; gcloud.bigquery = fake_bq; gcloud.storage = fake_storage
-gapi = types.ModuleType("google.api_core"); gapi.exceptions = fake_exc
-sys.modules.update({"google.cloud": gcloud, "google.cloud.firestore": fake_fs,
-                    "google.cloud.bigquery": fake_bq, "google.cloud.storage": fake_storage,
-                    "google.api_core": gapi, "google.api_core.exceptions": fake_exc})
 
 import vote_service  # noqa: E402
 
@@ -1223,15 +1112,27 @@ ok(c.get("/p/vf_poll/verify/ballots.csv").status_code == 200
 ok(c.get("/p/vf_poll/verify/secrets.env").status_code == 404,
    "verification route only serves the three known files")
 
-# ---- notification opt-out / opt-in ----
+# ---- notification opt-out / opt-in (signed links only) ----
 ok(c.get("/prefs").status_code == 200 and "Notification preferences" in c.get("/prefs").data.decode(),
    "prefs page renders")
-ok(c.post("/prefs/optout", json={"contact": "Opt@Out.org"}).get_json() == {"status": "ok"},
-   "optout is enumeration-safe (generic ok)")
+# a TYPED contact can no longer suppress delivery — that was a ballot-delivery
+# denial vector; only the member's own signed link acts.
+ok(c.post("/prefs/optout", json={"contact": "Opt@Out.org"}).status_code == 400
+   and not vote_service._is_suppressed("opt@out.org"),
+   "a typed contact cannot opt out (signed link required)")
+_ootok = vote_service._prefs_token("Opt@Out.org", "optout")
+ok(c.post("/prefs/optout", json={"token": _ootok}).get_json() == {"status": "ok"},
+   "the member's signed opt-out link suppresses the (normalized) contact")
 ok(vote_service._is_suppressed("opt@out.org") is True,
    "opt-out suppresses the (normalized) contact")
-ok(c.post("/prefs/optin", json={"contact": "opt@out.org"}).get_json() == {"status": "ok"}
-   and vote_service._is_suppressed("opt@out.org") is False, "opt-in re-enables it")
+# an opt-out token cannot be replayed to re-enable, and vice versa
+ok(c.post("/prefs/optin", json={"token": _ootok}).status_code == 400
+   and vote_service._is_suppressed("opt@out.org") is True,
+   "opt-out token is action-bound (cannot opt back in)")
+_oitok = vote_service._prefs_token("opt@out.org", "optin")
+ok(c.post("/prefs/optin", json={"token": _oitok}).get_json() == {"status": "ok"}
+   and vote_service._is_suppressed("opt@out.org") is False,
+   "the matching opt-in link re-enables it")
 # suppressed contact is skipped by the mass send + the in-app resend
 _sup = _sc.run([{"member_id": "Z", "poll_id": "p", "chapter": "x", "channel": "email",
                  "destination": "opt@out.org", "vote_link": "https://v"}],
@@ -1466,5 +1367,36 @@ ok("</script>" not in _qdef_blob and "\\u003c" in _qdef_blob,
    "QDEF JSON neutralizes angle brackets so it can't close its <script>")
 ok('value="</script>' not in _page and 'value="&lt;/script&gt;' in _page,
    "chapter name is HTML-escaped in the attribute context")
+
+# ---- untrusted roll fields can't corrupt or weaponize the export CSV ----
+ok(vote_service._csv_cell("AK1,999") == '"AK1,999"',
+   "a comma in member_id stays one CSV column")
+ok(vote_service._csv_cell('=HYPERLINK("http://evil/")').startswith("\"'="),
+   "a formula-prefixed cell is neutralized for Excel/Sheets")
+for _pfx in ("=", "+", "-", "@"):
+    ok(vote_service._csv_cell(_pfx + "x").startswith("\"'" + _pfx),
+       f"leading {_pfx!r} neutralized")
+_ezip = c.get("/admin/api/polls/special_ref/export.zip", headers=hdr)
+_ebal = _zip2.ZipFile(_io2.BytesIO(_ezip.data)).read("ballots.csv").decode()
+ok(all(len(r) == len(_ebal.splitlines()[0].split(",")) for r in
+       __import__("csv").reader(_ebal.splitlines()[1:]) if r),
+   "export ballots.csv rows all match the header's column count")
+
+# ---- per-IP throttles key on a proxy-written hop, not a spoofable one ----
+def _ip_for(xff, peer="203.0.113.9"):
+    with vote_service.app.test_request_context(
+            "/", environ_base={"REMOTE_ADDR": peer},
+            headers=({"X-Forwarded-For": xff} if xff else {})):
+        return vote_service._client_ip()
+ok(_ip_for("9.9.9.9, 203.0.113.9") == "203.0.113.9",
+   "client-supplied X-Forwarded-For prefix is ignored")
+ok(_ip_for("a, b, c, 203.0.113.9") == "203.0.113.9",
+   "multiple spoofed hops can't walk past the trusted one")
+ok(_ip_for(None) == "203.0.113.9", "no XFF falls back to the peer address")
+vote_service._prov_hits.clear()
+_n = sum(vote_service._prov_throttled(_ip_for(f"spoof{i}, 203.0.113.9"))
+         for i in range(12))
+vote_service._prov_hits.clear()
+ok(_n > 0, "rotating X-Forwarded-For no longer bypasses the provisional throttle")
 
 print(f"SMOKE TEST: all {passed} checks passed")
