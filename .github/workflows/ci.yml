@@ -29,6 +29,13 @@ jobs:
       - name: Offline smoke test (routes, policy, admin surface)
         run: python3 tools/smoke_test.py
 
+      # Adversarial counterpart to the smoke test: proves the app REFUSES what
+      # it shouldn't do. The authorization matrix is generated from
+      # app.url_map, so a newly added route that nobody classified fails here
+      # rather than shipping without an auth check.
+      - name: Security suite (authz matrix, injection, secrecy, abuse)
+        run: python3 tools/security_test.py
+
       - name: Tabulation regression (real BLT elections)
         run: python3 tools/blt_regression.py
 

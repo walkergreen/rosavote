@@ -696,13 +696,21 @@ def _question_html(q, n, total) -> str:
         out.append(f'<div class="vk-sect vk-sect-{style}">'
                    f'<p class="vk-sect-k">{_esc(sect.get("kicker") or "")}</p>'
                    f'<h3 class="vk-sect-t">{_esc(sect.get("title") or "")}</h3>'
-                   + (f'<p class="vk-sect-s">{sect.get("sub")}</p>' if sect.get("sub") else "")
+                   # sanitize at RENDER as well as at save: these two fields are
+                   # deliberately rendered as HTML (admins format their prose),
+                   # and _validate_questions cleans them on the way in — but a
+                   # config that never passed through the builder (seeded
+                   # directly, written straight to Firestore, or predating
+                   # validation) would otherwise render whatever it holds.
+                   + (f'<p class="vk-sect-s">{sanitize_html(sect.get("sub"))}</p>'
+                      if sect.get("sub") else "")
                    + "</div>")
     label = f' &middot; {_esc(q["label"])}' if q.get("label") else ""
     out.append('<div class="vk-measure"' + (' style="margin-top:20px;"' if n > 1 else "") + ">"
                f'<p class="vk-measure-no">Question {n} of {total}{label}</p>'
                f'<p class="vk-measure-q">{_esc(q["title"])}</p>'
-               + "".join(f'<p class="vk-measure-t">{para}</p>' for para in (q.get("text") or []))
+               + "".join(f'<p class="vk-measure-t">{sanitize_html(para)}</p>'
+                         for para in (q.get("text") or []))
                + "</div>")
 
     typ, key = q["type"], q["key"]
