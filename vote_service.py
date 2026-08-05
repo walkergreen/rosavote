@@ -35,6 +35,13 @@ from google.api_core import exceptions as gcloud_exc
 
 app = Flask(__name__)
 
+# Hard cap on request bodies (Flask answers 413 past it). Without one, any
+# unauthenticated POST — /vote, /provisional — can stream an arbitrarily large
+# JSON body that the app buffers and parses before a single validation rule
+# runs. The largest legitimate body is a console roll import (20k members),
+# which fits inside this comfortably.
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+
 # Canonical host. When both rosavote.com and rosavote.org point at this service,
 # any request to a non-canonical host is 301-redirected to CANONICAL_HOST — so
 # the .com → .org redirect works regardless of registrar/CDN. Set CANONICAL_HOST
@@ -246,8 +253,39 @@ def poll_questions(cfg) -> list:
     return cfg.get("questions") or demo_questions(cfg)
 
 
+# ---- visibility: who may learn how a given member voted -------------------
+# Bodies differ, and the difference is per QUESTION, not per poll: the same
+# meeting can take a recorded roll-call vote on a motion and a secret ballot
+# for officers.
+#   public — identity-linked AND published by name (recorded roll call)
+#   named  — identity-linked; admins + the voter's own chapter; only
+#            aggregates are published. The default, and what every existing
+#            non-secret question already does.
+#   secret — content stored with NO identity, in the admin-only collection
+#            (Const. Art. V §5 delegate elections, and any question flagged
+#            secret). Published as an anonymous ballot file so the result is
+#            still independently recountable.
+VISIBILITIES = ("public", "named", "secret")
+
+
+def q_visibility(q) -> str:
+    """A question's visibility. Legacy configs predate the field: `secret`
+    (and `delegate`, which implies it) meant the secret storage split, and
+    everything else was named."""
+    v = str(q.get("visibility") or "").strip().lower()
+    if v in VISIBILITIES:
+        return v
+    return "secret" if (q.get("secret") or q.get("delegate")) else "named"
+
+
 def secret_keys(cfg) -> list:
-    return [q["key"] for q in poll_questions(cfg) if q.get("secret")]
+    return [q["key"] for q in poll_questions(cfg) if q_visibility(q) == "secret"]
+
+
+def public_keys(cfg) -> list:
+    """Questions published as a by-name roll call."""
+    return [q["key"] for q in poll_questions(cfg)
+            if q_visibility(q) == "public" and q["type"] != "text"]
 
 
 def validate_answers(data, cfg) -> tuple[dict, dict]:
@@ -448,18 +486,44 @@ def load_polls(force: bool = False) -> dict:
     if not force and _cfg_cache["polls"] is not None and now - _cfg_cache["at"] < CFG_TTL_SECONDS:
         return _cfg_cache["polls"]
     try:
-        polls = {}
+        polls, n_docs = {}, 0
         for snap in db.collection(CONFIG_COLL).stream():
             d = snap.to_dict() or {}
+            n_docs += 1
             if d.get("archived"):
                 continue
             polls[snap.id] = _normalize_cfg(d)
-        if not polls:
+        # Only a COMPLETELY UNSEEDED collection falls back to the built-in
+        # seed. "Every poll archived" is a real, intentional state — it must
+        # not resurrect the demo chapters as live, votable ballots.
+        if not n_docs:
             polls = CHAPTERS
     except Exception:
-        polls = CHAPTERS  # Firestore unreachable/unseeded — serve the built-in seed
+        # Firestore unreachable: keep serving the LAST GOOD config. Falling
+        # back to the built-in seed mid-election would hand voters a
+        # different ballot (demo questions, demo test codes, demo windows)
+        # for the same poll_id. Back off for the TTL so a down backend isn't
+        # hammered once per request; only an instance that has never loaded a
+        # config at all uses the seed.
+        _cfg_cache["at"] = now
+        stale = _cfg_cache["polls"]
+        return stale if stale is not None else CHAPTERS
     _cfg_cache.update(at=now, polls=polls)
     return polls
+
+
+def _fresh_cfg_doc(poll_id: str):
+    """The poll's config doc read STRAIGHT from Firestore, bypassing the 60s
+    cache. Any read-modify-write of a config doc must start here: writing back
+    a cached copy silently reverts whatever another admin (or another Cloud
+    Run instance) saved inside the TTL window."""
+    try:
+        snap = db.collection(CONFIG_COLL).document(poll_id).get()
+        if getattr(snap, "exists", False):
+            return _normalize_cfg(snap.to_dict() or {})
+    except Exception:
+        return None
+    return None
 
 
 def chapter_or_none(poll_id: str):
@@ -750,10 +814,69 @@ def render_ballot(poll_id: str, cfg: dict, code: str = "") -> str:
 
 
 # ---- vote transaction (single-doc: no hot document) -----------------------
-@firestore.transactional
+def _ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
+                 comments: dict, identity: dict, code_h, weight: int = 1):
+    """Build the (doc_ref, payload) pairs for one cast ballot: the main
+    (identity-linked) record and, when the ballot has secret questions, the
+    separate secret-ballot record. Returns (pairs, record_hash).
+
+    Building and writing are split so a coded vote can commit the code burn
+    and BOTH ballot records in a single Firestore transaction — see
+    `_cast_txn`. `weight` is only stamped for codeless (provisional) ballots;
+    coded ballots resolve their CURRENT weight from the code doc at tally
+    time."""
+    skeys = set(secret_keys(cfg))
+    main_answers = {k: v for k, v in answers.items() if k not in skeys}
+    nonce = secrets.token_hex(8)
+    ac = canon_answers(main_answers)
+    rh = make_record_hash(receipt, ac, nonce)
+    wfield = {"weight": weight} if (code_h is None and weight != 1) else {}
+    pairs = [(db.collection(f"{poll_id}__ballots").document(rh), {
+        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
+        "nonce": nonce, "record_hash": rh,
+        "code_hash": code_h,
+        "comment": comments.get("text", ""),   # legacy field for older tools
+        "comments": comments,
+        "day_bucket": firestore.SERVER_TIMESTAMP,
+        **wfield,
+        **identity,
+    })]
+    if skeys:
+        dq = {k: (answers.get(k) or []) for k in sorted(skeys)}
+        dnonce = secrets.token_hex(8)
+        dcanon = canon_answers(dq)
+        drh = make_record_hash(receipt, dcanon, dnonce)
+        pairs.append((db.collection(f"{poll_id}__delegate_ballots").document(drh), {
+            "receipt": receipt, **dq, "answers_canon": dcanon,
+            "nonce": dnonce, "record_hash": drh,
+            "code_hash": code_h,   # ADMIN-ONLY troubleshooting trace — never chapter-visible
+            "day_bucket": firestore.SERVER_TIMESTAMP,
+            **wfield,
+            **({"provisional": True} if identity.get("provisional") else {}),
+        }))
+    return pairs, rh
+
+
+def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
+                       comments: dict, identity: dict, code_h, weight: int = 1,
+                       txn=None):
+    """Persist a cast ballot. Shared by coded votes and provisional promotion
+    so the storage split can't drift. Pass `txn` to enlist the writes in a
+    Firestore transaction."""
+    pairs, rh = _ballot_docs(poll_id, cfg, receipt, answers, comments,
+                             identity, code_h, weight)
+    for ref, payload in pairs:
+        if txn is not None:
+            txn.set(ref, payload)
+        else:
+            ref.set(payload)
+    return rh
+
+
 def _claim_code(txn, codes_coll, ch: str):
-    """Claims the code atomically. Returns the code doc's voter fields
-    (member_id, chapter) on success, None if already used."""
+    """Claim the code. Returns the code doc's voter fields (member_id,
+    chapter) on success, None if already used. Runs INSIDE `_cast_txn`'s
+    transaction — the read has to happen before any write is issued."""
     ref = codes_coll.document(ch)
     snap = ref.get(transaction=txn)
     if not snap.exists:
@@ -765,43 +888,25 @@ def _claim_code(txn, codes_coll, ch: str):
     return {"member_id": d.get("member_id"), "chapter": d.get("chapter")}
 
 
-def _write_ballot_docs(poll_id: str, cfg: dict, receipt: str, answers: dict,
-                       comments: dict, identity: dict, code_h, weight: int = 1):
-    """Write the main (identity-linked) record and, when the ballot has
-    secret questions, the separate secret-ballot record. Shared by coded
-    votes and provisional promotion so the storage split can't drift.
-    `weight` is only stamped for codeless (provisional) ballots — coded
-    ballots resolve their CURRENT weight from the code doc at tally time."""
-    skeys = set(secret_keys(cfg))
-    main_answers = {k: v for k, v in answers.items() if k not in skeys}
-    nonce = secrets.token_hex(8)
-    ac = canon_answers(main_answers)
-    rh = make_record_hash(receipt, ac, nonce)
-    wfield = {"weight": weight} if (code_h is None and weight != 1) else {}
-    db.collection(f"{poll_id}__ballots").document(rh).set({
-        "receipt": receipt, "answers": main_answers, "answers_canon": ac,
-        "nonce": nonce, "record_hash": rh,
-        "code_hash": code_h,
-        "comment": comments.get("text", ""),   # legacy field for older tools
-        "comments": comments,
-        "day_bucket": firestore.SERVER_TIMESTAMP,
-        **wfield,
-        **identity,
-    })
-    if skeys:
-        dq = {k: (answers.get(k) or []) for k in sorted(skeys)}
-        dnonce = secrets.token_hex(8)
-        dcanon = canon_answers(dq)
-        drh = make_record_hash(receipt, dcanon, dnonce)
-        db.collection(f"{poll_id}__delegate_ballots").document(drh).set({
-            "receipt": receipt, **dq, "answers_canon": dcanon,
-            "nonce": dnonce, "record_hash": drh,
-            "code_hash": code_h,   # ADMIN-ONLY troubleshooting trace — never chapter-visible
-            "day_bucket": firestore.SERVER_TIMESTAMP,
-            **wfield,
-            **({"provisional": True} if identity.get("provisional") else {}),
-        })
-    return rh
+@firestore.transactional
+def _cast_txn(txn, poll_id: str, cfg: dict, codes_coll, ch: str, receipt: str,
+              answers: dict, comments: dict):
+    """Claim the code AND write the ballot record(s) in ONE transaction.
+
+    These must not be separate steps: burning the code first and writing the
+    ballot afterwards means any failure between them (Firestore blip, request
+    deadline, instance eviction) leaves a used code with no ballot — the voter
+    is silently disenfranchised and cannot retry, because their code now reads
+    as already-voted. Committing together makes that state unreachable.
+
+    Returns None if the code was already used, else {"receipt": ...}."""
+    claim = _claim_code(txn, codes_coll, ch)
+    if claim is None:
+        return None
+    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
+                       {"member_id": claim.get("member_id"),
+                        "chapter": claim.get("chapter")}, ch, txn=txn)
+    return {"receipt": receipt}
 
 
 def cast_vote(poll_id: str, cfg: dict, code_plaintext: str, answers: dict,
@@ -820,15 +925,12 @@ def cast_vote(poll_id: str, cfg: dict, code_plaintext: str, answers: dict,
     Voters are told all of this on the ballot before voting."""
     codes = db.collection(f"{poll_id}__codes")
     ch = code_hash(code_plaintext)
+    receipt = new_receipt()
     txn = db.transaction()
-    claim = _claim_code(txn, codes, ch)
+    claim = _cast_txn(txn, poll_id, cfg, codes, ch, receipt, answers, comments)
     if claim is None:
         return {"status": "already_voted"}
-    receipt = secrets.token_hex(4).upper()
-    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
-                       {"member_id": claim.get("member_id"),
-                        "chapter": claim.get("chapter")}, ch)
-    return {"status": "recorded", "receipt": receipt}
+    return {"status": "recorded", "receipt": claim["receipt"]}
 
 
 def cast_provisional(poll_id: str, answers: dict, comments: dict, info: dict) -> dict:
@@ -836,7 +938,16 @@ def cast_provisional(poll_id: str, answers: dict, comments: dict, info: dict) ->
     Adjudicated by staff against membership after the fact. (Identity-linked
     by design until adjudication, so the comment lives with it.)"""
     prov = db.collection(f"{poll_id}__provisional")
-    receipt = "P" + secrets.token_hex(4).upper()[:7]
+    # The receipt IS this document's id, so a collision would silently
+    # OVERWRITE another member's sealed provisional ballot. 56 bits makes
+    # that vanishingly unlikely; the existence check makes it impossible.
+    receipt = new_receipt("P")
+    for _ in range(5):
+        if not getattr(prov.document(receipt).get(), "exists", False):
+            break
+        receipt = new_receipt("P")
+    else:
+        return {"status": "error", "error": "receipt_allocation_failed"}
     prov.document(receipt).set({
         "receipt": receipt,
         "answers": answers, "comments": comments,
@@ -1061,6 +1172,19 @@ def resend_code(poll_id):
 
 
 RECEIPT_RE = re.compile(r"^[A-Z0-9-]{4,16}$")
+# Receipts are 64-bit (16 hex chars). The old 32-bit receipt was a real
+# collision risk, not a theoretical one: across a 120k-voter election the
+# birthday bound puts the expected number of duplicate receipts near 2. That
+# matters because receipt is the lookup key for `verify`, `void`, and the
+# published ballots.csv — two voters sharing one would see (and could void)
+# each other's ballot. Short legacy receipts still validate and still resolve.
+RECEIPT_BYTES = 8
+
+
+def new_receipt(prefix: str = "") -> str:
+    """A fresh voter receipt. Stays inside RECEIPT_RE's 16-char budget."""
+    n = RECEIPT_BYTES - (1 if prefix else 0)
+    return prefix + secrets.token_hex(n).upper()
 
 
 _PUB_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
@@ -1080,6 +1204,11 @@ h2{{font-family:"Arial Narrow",sans-serif;text-transform:uppercase;margin:0 0 8p
 .win{{font-family:system-ui,sans-serif;font-size:.95rem}}.k{{font-family:system-ui,sans-serif;
 font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#dd1111;font-weight:700}}
 footer{{text-align:center;font:12px system-ui,sans-serif;color:rgba(0,0,0,.55);padding:16px}}
+table.rc{{width:100%;border-collapse:collapse;font:.85rem system-ui,sans-serif;margin-top:8px;
+display:block;overflow-x:auto}}
+table.rc th,table.rc td{{border:1px solid rgba(0,0,0,.25);padding:4px 6px;text-align:left;
+vertical-align:top}}
+table.rc th{{background:#fff5e5;text-transform:uppercase;font-size:.7rem;letter-spacing:.06em}}
 a{{color:#dd1111}}</style></head><body>
 <div class="banner"><img src="/logo.svg" alt="" style="height:30px;vertical-align:-8px;margin-right:6px"/>RosaVote<small>{title} — Official Results</small></div>
 <main>{body}</main>
@@ -1172,6 +1301,21 @@ def public_results(poll_id):
         elif q["type"] == "text":
             inner = (f'<p class="win">{q["responses"]} written response(s) received '
                      '(content reviewed by election administration).</p>')
+        if q.get("visibility") == "public":
+            # Recorded roll call: this body publishes how each member voted.
+            qdef = next((x for x in poll_questions(cfg) if x["key"] == q["key"]), None)
+            rows = roll_call_rows(poll_id, qdef) if qdef else []
+            link = (f'<p class="win"><a href="/p/{poll_id}/rollcall/{q["key"]}.csv">'
+                    f'Download the full roll call ({len(rows)} ballots, CSV)</a></p>')
+            inner += ('<p class="k">Recorded vote — this question is published by name</p>'
+                      + link)
+            if 0 < len(rows) <= ROLLCALL_INLINE_MAX:
+                inner += ('<table class="rc"><tr><th>Member</th><th>Chapter</th>'
+                          '<th>Vote</th></tr>' + "".join(
+                    f'<tr><td>{_esc(r["member_id"])}</td><td>{_esc(r["chapter"])}</td>'
+                    f'<td>{_esc(r["answer"])}'
+                    + (' <b>(VOIDED — not counted)</b>' if r["voided"] else '')
+                    + '</td></tr>' for r in rows) + '</table>')
         cards.append(f'<div class="card"><h2>{_esc(q["title"])}</h2>{inner}</div>')
     meta = (f'<div class="card"><p class="win">{res["ballots_counted"]} ballots counted'
             + (" · weighted election (ballots count at each voter's assigned weight)"
@@ -1397,6 +1541,25 @@ def verify_file(poll_id, fname):
         return "Unknown poll.", 404
     if not (cfg.get("finalized") and cfg.get("results_published")):
         return "Verification files publish after the election is finalized.", 409
+    if fname.endswith(".blt"):
+        # SECRET contests are absent from ballots.csv by design (their content
+        # never enters the identity-linked collection), which left the
+        # highest-stakes race — the delegate election — as the one nobody
+        # outside administration could recount. The BLT carries rankings and
+        # weights and NO identity at all, so publishing it restores public
+        # verifiability without touching ballot secrecy.
+        qkey = fname[:-4]
+        q = next((x for x in poll_questions(cfg)
+                  if x["key"] == qkey and q_visibility(x) == "secret"
+                  and x["type"] == "ranked"), None)
+        if not q:
+            return "Not found.", 404
+        _, _, secret_rows = _tally_rows(poll_id)
+        blt = _blt_text(secret_rows, qkey, q["options"], int(q.get("seats", 1)),
+                        title=f"{cfg.get('name', poll_id)} - {q['title']}")
+        return Response(blt, mimetype="text/plain",
+                        headers={"Content-Disposition": f"inline; filename={fname}",
+                                 "Cache-Control": "public, max-age=300"})
     if fname not in ("ballots.csv", "used_codes.csv", "chain_head.txt"):
         return "Not found.", 404
     ballots_csv, used_csv, head = _build_verification(poll_id)
@@ -1405,6 +1568,30 @@ def verify_file(poll_id, fname):
     mt = "text/plain" if fname.endswith(".txt") else "text/csv"
     return Response(body, mimetype=mt,
                     headers={"Content-Disposition": f"inline; filename={fname}",
+                             "Cache-Control": "public, max-age=300"})
+
+
+ROLLCALL_INLINE_MAX = 300     # bigger than this, the page links the CSV only
+
+
+@app.get("/p/<poll_id>/rollcall/<qkey>.csv")
+def rollcall_csv(poll_id, qkey):
+    """PUBLIC by-name roll call for a question the poll declares
+    `visibility: public` — the recorded vote some bodies require. Same gate as
+    the results page: finalized AND published. A question that is `named` or
+    `secret` is never served here, whatever the caller asks for."""
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
+        return "Unknown poll.", 404
+    if not (cfg.get("finalized") and cfg.get("results_published")):
+        return "Roll calls publish after the election is finalized.", 409
+    q = next((x for x in poll_questions(cfg)
+              if x["key"] == qkey and q_visibility(x) == "public"), None)
+    if not q:
+        return "Not a published roll-call question.", 404
+    return Response(_roll_call_csv(roll_call_rows(poll_id, q)), mimetype="text/csv",
+                    headers={"Content-Disposition":
+                             f"attachment; filename={poll_id}_{qkey}_rollcall.csv",
                              "Cache-Control": "public, max-age=300"})
 
 
@@ -1453,7 +1640,46 @@ def vote(poll_id):
         return jsonify({"error": "invalid_code"}), 404
     except gcloud_exc.Aborted:
         return jsonify({"error": "try_again"}), 503
+    except Exception:
+        # The cast is one transaction, so a failure here means NOTHING was
+        # committed — the code is still unused and the voter can safely retry.
+        # Never surface the exception text: it can carry ballot content.
+        app.logger.exception("vote transaction failed for poll %s", poll_id)
+        return jsonify({"error": "try_again"}), 503
     return jsonify(result), 200
+
+
+
+# Provisional ballots are the one UNAUTHENTICATED write path — no code, no
+# token. A script can therefore mint Firestore documents at will, burying the
+# adjudication queue in junk that staff must hand-review and running up
+# storage. This is a per-instance throttle (Cloud Run spreads traffic, so the
+# effective ceiling is this times the instance count); it is a speed bump for
+# casual abuse, NOT a substitute for the edge rate limits in
+# infra/STAGING_AND_EDGE.md.
+PROV_MAX_PER_IP = 5
+PROV_WINDOW_S = 15 * 60
+_prov_hits: dict = {}
+
+
+def _prov_throttled(ip: str) -> bool:
+    now = time.time()
+    if len(_prov_hits) > 10000:            # bounded: drop everything stale
+        for k, v in list(_prov_hits.items()):
+            if not [t for t in v if now - t < PROV_WINDOW_S]:
+                _prov_hits.pop(k, None)
+    hits = [t for t in _prov_hits.get(ip, ()) if now - t < PROV_WINDOW_S]
+    if len(hits) >= PROV_MAX_PER_IP:
+        _prov_hits[ip] = hits
+        return True
+    hits.append(now)
+    _prov_hits[ip] = hits
+    return False
+
+
+def _client_ip() -> str:
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or "?"
 
 
 @app.post("/p/<poll_id>/provisional")
@@ -1464,6 +1690,11 @@ def provisional(poll_id):
     st = window_state(cfg)
     if st != "open":
         return jsonify({"error": st, "message": f"Voting is not open for {cfg['name']}."}), 403
+    if _prov_throttled(_client_ip()):
+        return jsonify({"error": "too_many_requests",
+                        "message": "Too many provisional ballots from this connection. "
+                                   "If you are helping several members vote, contact "
+                                   "your chapter's election administrator."}), 429
 
     data = request.get_json(silent=True) or {}
     info = data.get("info", {}) or {}
@@ -1475,7 +1706,8 @@ def provisional(poll_id):
         return jsonify({"error": "missing_info"}), 400
     if not re.search(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", info.get("emails", "")):
         return jsonify({"error": "missing_info", "field": "emails"}), 400
-    return jsonify(cast_provisional(poll_id, answers, comments, info)), 200
+    out = cast_provisional(poll_id, answers, comments, info)
+    return jsonify(out), (200 if out.get("status") == "provisional_recorded" else 503)
 
 
 SPLASH = """<!doctype html><html lang="en"><head>
@@ -2144,6 +2376,21 @@ def _validate_questions(qs, errors, warnings):
         if "required" in q:
             nq["required"] = bool(q["required"])
 
+        raw_vis = str(q.get("visibility") or "").strip().lower()
+        if raw_vis and raw_vis not in VISIBILITIES:
+            errors.append(f"question {key!r}: visibility must be one of {VISIBILITIES}")
+        vis = q_visibility(q)
+        if typ == "text" and vis != "named":
+            # Free text is stored as an identity-linked comment, never in the
+            # canonical answers — it can be neither anonymized nor published.
+            errors.append(f"question {key!r}: text questions are always 'named' "
+                          "(free text is never published or anonymized)")
+            vis = "named"
+        nq["visibility"] = vis
+        # `secret` stays the storage flag every downstream path reads; it is
+        # now derived from visibility rather than set independently.
+        nq["secret"] = (vis == "secret")
+
         if typ in ("ranked", "multi", "score"):
             opts, seen = [], set()
             for c in (q.get("options") or []):
@@ -2237,7 +2484,8 @@ def _validate_questions(qs, errors, warnings):
                     if con["tag"] not in all_tags:
                         warnings.append(f"question {key!r}: constraint tag "
                                         f"{con['tag']!r} matches no candidate tags")
-            nq["secret"] = bool(q.get("secret")) or bool(q.get("delegate"))
+            # nq["secret"] already came from visibility above; `delegate`
+            # implies it, which q_visibility() accounts for.
             nq["delegate"] = bool(q.get("delegate"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
             for f in ("real_delegates", "real_alternates"):
@@ -2294,7 +2542,6 @@ def _validate_questions(qs, errors, warnings):
                 warnings.append(f"question {key!r}: multi-seat STAR is sequential "
                                 "(majoritarian), not proportional — use ranked STV "
                                 "or Meek for a proportional multi-winner contest")
-            nq["secret"] = bool(q.get("secret"))
             nq["shuffle"] = bool(q.get("shuffle", nq["secret"]))
             if nq["options"] and len(nq["options"]) <= seats:
                 warnings.append(f"question {key!r} uncontested: {len(nq['options'])} "
@@ -2468,6 +2715,11 @@ def validate_poll_config(poll_id: str, body: dict):
         cfg["quota_groups"] = qgroups
     if body.get("demo"):
         cfg["demo"] = True   # demo/test poll: stays votable even when finalized
+    if body.get("admin_sees_answers"):
+        # Off by default: troubleshooting works from recorded-yes/no alone.
+        # A body that wants administrators able to read a named ballot
+        # (the pre-2026-07 behavior) opts in here, per poll.
+        cfg["admin_sees_answers"] = True
     if questions is not None:
         cfg["questions"] = questions
     else:
@@ -2659,6 +2911,10 @@ def admin_open_poll(poll_id):
     cfg = chapter_or_none(poll_id)
     if not cfg:
         return jsonify({"error": "unknown_poll"}), 404
+    # Read-modify-write on the config doc must start from the STORED doc, not
+    # the 60s cache — otherwise flipping a window rewrites the whole document
+    # from a stale copy and silently reverts a concurrent builder save.
+    cfg = _fresh_cfg_doc(poll_id) or cfg
     if cfg.get("finalized"):
         return jsonify({"error": "finalized",
                         "message": "This election is finalized. Reopening it is the "
@@ -2686,7 +2942,7 @@ def admin_close_poll(poll_id):
     cfg = chapter_or_none(poll_id)
     if not cfg:
         return jsonify({"error": "unknown_poll"}), 404
-    cfg = dict(cfg, closes_at=int(time.time()))
+    cfg = dict(_fresh_cfg_doc(poll_id) or cfg, closes_at=int(time.time()))
     db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
     _audit(poll_id, "close_poll", ident["name"])
     load_polls(force=True)
@@ -2822,6 +3078,55 @@ def _tally_rows(poll_id: str):
     return main_rows, comments_rows, secret_rows
 
 
+def _answer_display(v, q, names=None) -> str:
+    """One voter's answer to one question, as a person reads it. Option ids
+    are resolved to candidate names so a roll call is legible without the
+    config next to it."""
+    names = names if names is not None else {
+        o["id"]: o["name"] for o in (q.get("options") or [])}
+    if v is None or v == "":
+        return "(no answer)"
+    if isinstance(v, dict):        # score: {option_id: rating}
+        return "; ".join(f"{names.get(k, k)}={v[k]}" for k in sorted(v))
+    if isinstance(v, list):        # ranked (ordered) / multi (a set)
+        if v == ["ABSTAIN"]:
+            return "ABSTAIN"
+        sep = " > " if q["type"] == "ranked" else ", "
+        return sep.join(names.get(str(x).upper(), str(x)) for x in v)
+    return str(v)
+
+
+def roll_call_rows(poll_id: str, q: dict):
+    """By-name record for a `public` question: who voted, and how.
+
+    Only ever called for questions the poll declares `visibility: public` —
+    the recorded roll call some bodies require. Voided ballots are included
+    and flagged rather than dropped, because a roll call that quietly omits
+    a cancelled vote reads as if the member never voted at all."""
+    names = {o["id"]: o["name"] for o in (q.get("options") or [])}
+    rows = []
+    for snap in db.collection(f"{poll_id}__ballots").stream():
+        d = snap.to_dict() or {}
+        rows.append({
+            "member_id": str(d.get("member_id") or ""),
+            "chapter": str(d.get("chapter") or ""),
+            "answer": _answer_display((d.get("answers") or {}).get(q["key"]), q, names),
+            "voided": bool(d.get("voided")),
+            "provisional": bool(d.get("provisional")),
+        })
+    rows.sort(key=lambda r: (r["chapter"], r["member_id"]))
+    return rows
+
+
+def _roll_call_csv(rows) -> str:
+    lines = ["member_id,chapter,answer,voided,provisional"]
+    for r in rows:
+        lines.append(",".join([_csv_cell(r["member_id"]), _csv_cell(r["chapter"]),
+                               _csv_cell(r["answer"]), str(r["voided"]).lower(),
+                               str(r["provisional"]).lower()]))
+    return "\n".join(lines) + "\n"
+
+
 def _is_blank_answer(v, typ) -> bool:
     """An answer that carries no real selection — empty or all-abstain. An
     all-blank ballot is the signature of a client glitch or a bot that opened
@@ -2853,7 +3158,8 @@ def compute_results(poll_id: str, cfg: dict) -> dict:
     for q in all_questions:
         key, typ = q["key"], q["type"]
         entry = {"key": key, "type": typ, "title": q["title"],
-                 "secret": bool(q.get("secret"))}
+                 "secret": bool(q.get("secret")),
+                 "visibility": q_visibility(q)}
         rows = secret_rows if q.get("secret") else main_rows
         if typ != "text":
             entry["blank"] = sum(w for a, w in rows
@@ -3088,7 +3394,8 @@ def admin_ballot_lookup(poll_id):
     ident = require_admin(poll_id, national_only=True)
     if not ident:
         return jsonify({"error": "forbidden"}), 403
-    if not chapter_or_none(poll_id):
+    cfg = chapter_or_none(poll_id)
+    if not cfg:
         return jsonify({"error": "unknown_poll"}), 404
     member_id = str(request.args.get("member_id", "")).strip()
     receipt = str(request.args.get("receipt", "")).strip().upper()
@@ -3108,18 +3415,42 @@ def admin_ballot_lookup(poll_id):
             r = (snap.to_dict() or {}).get("receipt")
             if r in wanted:
                 secret_receipts.add(r)
+    # CONTENT IS OFF BY DEFAULT. Troubleshooting asks "did this member's
+    # ballot land?", which recorded-yes/no per question answers completely —
+    # the same proof `secret_ballot_recorded` has always given for delegate
+    # questions, now applied to all of them. Answers come back only for
+    # questions the poll publishes by name anyway, or when the body has
+    # deliberately set admin_sees_answers on the poll.
+    show = bool(cfg.get("admin_sees_answers"))
+    qs = [q for q in poll_questions(cfg) if q["type"] != "text"]
+    visible = {q["key"] for q in qs
+               if q_visibility(q) == "public" or (show and q_visibility(q) != "secret")}
     _audit(poll_id, "ballot_lookup", ident["name"],
            member_id=member_id or None, receipt=receipt or None,
-           found=len(matches))
-    return jsonify({"found": len(matches), "ballots": [{
-        "receipt": d.get("receipt"), "member_id": d.get("member_id"),
-        "chapter": d.get("chapter"),
-        "answers": d.get("answers"), "comments": d.get("comments") or {},
-        "voided": bool(d.get("voided")), "void_reason": d.get("void_reason"),
-        "provisional": bool(d.get("provisional")),
-        "record_hash": d.get("record_hash"),
-        "secret_ballot_recorded": d.get("receipt") in secret_receipts,
-    } for d in matches]}), 200
+           found=len(matches), answers_shown=bool(visible))
+
+    def _one(d):
+        a = d.get("answers") or {}
+        out = {
+            "receipt": d.get("receipt"), "member_id": d.get("member_id"),
+            "chapter": d.get("chapter"),
+            "voided": bool(d.get("voided")), "void_reason": d.get("void_reason"),
+            "provisional": bool(d.get("provisional")),
+            "record_hash": d.get("record_hash"),
+            "secret_ballot_recorded": d.get("receipt") in secret_receipts,
+            # per-question proof of recording, with no content
+            "recorded": {q["key"]: (q["key"] in a) for q in qs},
+            # the blank-ballot signature the console flags, computed here so
+            # nobody has to read a ballot to investigate a spike
+            "blank": all(_is_blank_answer(a.get(q["key"]), q["type"]) for q in qs) if qs else False,
+            "answers_shown": sorted(visible),
+        }
+        if visible:
+            out["answers"] = {k: v for k, v in a.items() if k in visible}
+            out["comments"] = d.get("comments") or {} if show else {}
+        return out
+    return jsonify({"found": len(matches),
+                    "ballots": [_one(d) for d in matches]}), 200
 
 
 @app.post("/admin/api/polls/<poll_id>/recount_preview")
@@ -3245,9 +3576,25 @@ def admin_publish_results(poll_id):
     if not cfg.get("finalized"):
         return jsonify({"error": "not_finalized",
                         "message": "Results publish after the poll is finalized."}), 409
-    publish = bool((request.get_json(silent=True) or {}).get("publish", True))
-    db.collection(CONFIG_COLL).document(poll_id).set(
-        cfg_to_doc(dict(cfg, results_published=publish)))
+    body = request.get_json(silent=True) or {}
+    publish = bool(body.get("publish", True))
+    if publish and not body.get("force"):
+        # Publishing FREEZES the tally. Adjudicating a provisional afterwards
+        # adds a real ballot that the frozen copy will never show, so a poll
+        # with a live adjudication queue must not be certified by accident.
+        try:
+            pending = sum(1 for _ in db.collection(f"{poll_id}__provisional")
+                          .where("status", "==", "pending").stream())
+        except Exception:
+            pending = 0
+        if pending:
+            return jsonify({"error": "provisionals_pending", "pending": pending,
+                            "message": f"{pending} provisional ballot(s) are still "
+                                       "awaiting adjudication. Publishing now freezes "
+                                       "a tally that excludes them. Clear the queue "
+                                       "first, or re-send with force:true."}), 409
+    cfg = dict(_fresh_cfg_doc(poll_id) or cfg, results_published=publish)
+    db.collection(CONFIG_COLL).document(poll_id).set(cfg_to_doc(cfg))
     if publish:
         _store_published_results(poll_id, cfg)   # freeze + cache for mass viewing
     _audit(poll_id, "results_publish" if publish else "results_unpublish", ident["name"])
@@ -3310,7 +3657,9 @@ def _results_txt(res: dict) -> str:
     out.append("")
     for q in res["questions"]:
         out.append("=" * 72)
-        out.append(q["title"] + ("   [secret ballot]" if q.get("secret") else ""))
+        out.append(q["title"] + {"secret": "   [secret ballot]",
+                                 "public": "   [recorded roll call — published by name]",
+                                 }.get(q.get("visibility", ""), ""))
         if q["type"] == "yesno":
             c = q["counts"]
             out.append(f"  Yes {c['YES']} · No {c['NO']} · Abstain {c['ABSTAIN']}"
@@ -3492,6 +3841,11 @@ def admin_export_zip(poll_id):
                         '"' + str(d.get("chapter") or "").replace('"', '""') + '"']
             lines.append(",".join(row))
         z.writestr("ballots.csv", "\n".join(lines) + "\n")
+        # by-name roll call for every question this body publishes by name
+        for q in poll_questions(cfg):
+            if q_visibility(q) == "public" and q["type"] != "text":
+                z.writestr(f"rollcall_{q['key']}.csv",
+                           _roll_call_csv(roll_call_rows(poll_id, q)))
     buf.seek(0)
     _audit(poll_id, "export_zip", ident["name"], anonymize=anonymize)
     return Response(buf.read(), mimetype="application/zip",
@@ -3620,9 +3974,17 @@ def admin_import_voters(poll_id):
     return jsonify({"created": created, "skipped": skipped, "bad": bad}), 200
 
 
+BATCH_SIZE = 400          # Firestore hard-caps a WriteBatch at 500 operations
+
+
 def _import_members(poll_id, cfg, members, ident, source):
     """Mint one hashed code doc per NEW member. Returns (created_manifest,
-    skipped, bad); plaintext codes exist only in the returned manifest."""
+    skipped, bad); plaintext codes exist only in the returned manifest.
+
+    Writes go out in BATCHES: one round trip per document put a 20k-member
+    console import (never mind the 200k server-side cap) far outside the Cloud
+    Run request deadline, and a timeout mid-import strands a partial roll with
+    no manifest for the codes already minted."""
     codes = db.collection(f"{poll_id}__codes")
     existing = set()
     for snap in codes.stream():
@@ -3631,6 +3993,17 @@ def _import_members(poll_id, cfg, members, ident, source):
             existing.add(str(mid))
     created, skipped, bad = [], 0, 0
     base = request.url_root.rstrip("/")
+    pending = []
+
+    def _flush():
+        if not pending:
+            return
+        batch = db.batch()
+        for ref, doc in pending:
+            batch.set(ref, doc)
+        batch.commit()
+        pending.clear()
+
     for m in members:
         mid = str((m.get("member_id") if isinstance(m, dict) else m) or "").strip()
         chapter = str((m.get("chapter") if isinstance(m, dict) else "") or "").strip() \
@@ -3650,20 +4023,36 @@ def _import_members(poll_id, cfg, members, ident, source):
         doc = {"used": False, "member_id": mid, "chapter": chapter}
         if weight != 1:
             doc["weight"] = weight
-        codes.document(code_hash(code)).set(doc)
+        pending.append((codes.document(code_hash(code)), doc))
+        if len(pending) >= BATCH_SIZE:
+            _flush()
         created.append({"member_id": mid, "chapter": chapter, "weight": weight,
                         "code": code, "vote_link": f"{base}/p/{poll_id}/v/{code}"})
+    _flush()
     _audit(poll_id, "voters_import", ident["name"], source=source,
            created=len(created), skipped=skipped, bad=bad)
     return created, skipped, bad
 
 
+def _csv_cell(v) -> str:
+    """One CSV field, always quoted, and never a spreadsheet formula.
+
+    member_id and chapter come from an uploaded roll, so they are untrusted:
+    an unquoted value containing a comma silently shifts every later column
+    (a code lands in the wrong member's row), and a leading =/+/-/@ makes
+    Excel or Sheets execute the cell when staff open the manifest."""
+    s = "" if v is None else str(v)
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        s = "'" + s
+    return '"' + s.replace('"', '""') + '"'
+
+
 def _manifest_csv(created) -> str:
     lines = ["member_id,chapter,weight,code,vote_link"]
     for c in created:
-        lines.append(",".join([c["member_id"],
-                               '"' + str(c["chapter"]).replace('"', '""') + '"',
-                               str(c.get("weight", 1)), c["code"], c["vote_link"]]))
+        lines.append(",".join(_csv_cell(x) for x in
+                              (c["member_id"], c["chapter"], c.get("weight", 1),
+                               c["code"], c["vote_link"])))
     return "\n".join(lines) + "\n"
 
 
@@ -3876,13 +4265,38 @@ def admin_adjudicate_provisional(poll_id, receipt):
         pw = max(WEIGHT_MIN, min(WEIGHT_MAX, int(data.get("weight") or 1)))
     except (TypeError, ValueError):
         pw = 1
-    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
-                       {"member_id": member_id, "chapter": prov.get("chapter"),
-                        "provisional": True}, None, weight=pw)
-    ref.update({"status": "verified", "member_id": member_id,
-                "adjudicated_by": ident["name"], "adjudicated_at": firestore.SERVER_TIMESTAMP})
+    try:
+        _promote_txn(db.transaction(), poll_id, cfg, ref, receipt, answers,
+                     comments, member_id, prov.get("chapter"), pw, ident["name"])
+    except _AlreadyAdjudicated:
+        return jsonify({"error": "already_adjudicated"}), 409
     _audit(poll_id, "provisional_verify", ident["name"], receipt=receipt, member_id=member_id)
     return jsonify({"ok": True, "status": "verified", "receipt": receipt}), 200
+
+
+class _AlreadyAdjudicated(Exception):
+    """The provisional left `pending` between our check and our write."""
+
+
+@firestore.transactional
+def _promote_txn(txn, poll_id, cfg, ref, receipt, answers, comments,
+                 member_id, chapter, weight, admin):
+    """Flip the provisional to `verified` and write its ballot record(s) in
+    ONE transaction, re-checking `pending` inside it.
+
+    Two adjudicators clicking Verify at the same moment both pass an
+    unsynchronized status check and both promote — the member ends up with two
+    counted ballots. Re-reading the status under the transaction makes the
+    second click lose."""
+    snap = ref.get(transaction=txn)
+    if (snap.to_dict() or {}).get("status") != "pending":
+        raise _AlreadyAdjudicated()
+    txn.update(ref, {"status": "verified", "member_id": member_id,
+                     "adjudicated_by": admin,
+                     "adjudicated_at": firestore.SERVER_TIMESTAMP})
+    _write_ballot_docs(poll_id, cfg, receipt, answers, comments,
+                       {"member_id": member_id, "chapter": chapter,
+                        "provisional": True}, None, weight=weight, txn=txn)
 
 
 # ---- admin: void-and-reissue (never edit) --------------------------------
@@ -3915,6 +4329,13 @@ def admin_void(poll_id):
     matches = list(ballots.where("receipt", "==", receipt).stream())
     if not matches:
         return jsonify({"error": "receipt_not_found"}), 404
+    if len(matches) > 1:
+        # Legacy 32-bit receipts could collide. Voiding "the first match"
+        # would cancel a ballot at random — refuse and make a human look.
+        return jsonify({"error": "ambiguous_receipt", "matches": len(matches),
+                        "message": "More than one ballot carries this receipt. "
+                                   "Resolve by member_id (Ballot lookup) before "
+                                   "voiding."}), 409
     main = matches[0]
     md = main.to_dict()
     if md.get("voided"):
@@ -3927,7 +4348,20 @@ def admin_void(poll_id):
     for doc in db.collection(f"{poll_id}__delegate_ballots").where("receipt", "==", receipt).stream():
         doc.reference.update(void_fields)
 
-    # 2. reissue: fresh code for the same member (old code stays burned)
+    # 2. reissue: fresh code for the same member (old code stays burned).
+    # The voter's ballot WEIGHT lives on the code doc, so it has to ride
+    # across — a reissued code that silently reverts a weighted delegate to
+    # weight 1 would change the outcome of the election it was meant to fix.
+    old_hash = md.get("code_hash")
+    carried = {}
+    if old_hash:
+        try:
+            osnap = db.collection(f"{poll_id}__codes").document(old_hash).get()
+            ow = (osnap.to_dict() or {}).get("weight") if getattr(osnap, "exists", False) else None
+            if ow is not None:
+                carried["weight"] = max(WEIGHT_MIN, min(WEIGHT_MAX, int(ow)))
+        except (TypeError, ValueError, AttributeError):
+            pass
     new_code = secrets.token_urlsafe(12)
     new_hash = code_hash(new_code)
     db.collection(f"{poll_id}__codes").document(new_hash).set({
@@ -3935,6 +4369,7 @@ def admin_void(poll_id):
         "member_id": md.get("member_id"),
         "chapter": md.get("chapter"),
         "reissued_from": md.get("code_hash"),
+        **carried,
     })
 
     # 3. append-only audit record
@@ -4086,7 +4521,9 @@ API_GROUPS = [
         ("POST", "/p/&lt;poll&gt;/vote", "Voting code (in body)", "Cast a ballot: {code, answers:{questionKey:value}}. One code = one vote, enforced atomically. → {status:'recorded', receipt}."),
         ("POST", "/p/&lt;poll&gt;/provisional", "None", "Cast a sealed provisional ballot with identifying info for later adjudication."),
         ("GET", "/p/&lt;poll&gt;/verify?receipt=…", "None", "Confirm a ballot was stored → {found, status}. No identity, no answers — safe to share."),
-        ("GET", "/p/&lt;poll&gt;/results", "None", "Public results page (only after finalize + publish). Aggregate only; served from a frozen cache."),
+        ("GET", "/p/&lt;poll&gt;/results", "None", "Public results page (only after finalize + publish). Aggregates, plus a by-name roll call for any question the poll declares visibility:public."),
+        ("GET", "/p/&lt;poll&gt;/rollcall/&lt;question&gt;.csv", "None", "Recorded roll call — member_id, chapter, and how they voted — for a visibility:public question. Named and secret questions are never served here. Requires finalize + publish."),
+        ("GET", "/p/&lt;poll&gt;/verify/&lt;file&gt;", "None", "Verification artifacts after finalize + publish: ballots.csv, used_codes.csv, chain_head.txt, and &lt;question&gt;.blt for each secret ranked contest (anonymous rankings + weights, no identity — so a secret election is still publicly recountable)."),
     ]),
     ("Admin — auth", [
         ("GET", "/admin/api/whoami", "X-Admin-Token", "Resolve the caller's identity → {name, role, polls}."),

@@ -1,0 +1,50 @@
+# Runs the checks CLAUDE.md asks for before a deploy, on every PR.
+# All of them are offline: smoke_test stubs Firestore/BigQuery/Storage, and
+# blt_regression counts bundled fixture elections — no GCP credentials, no
+# secrets, nothing to leak.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile's runtime, so a syntax or stdlib
+          # difference can't pass here and fail in Cloud Run.
+          python-version: '3.12'
+
+      # smoke_test stubs every google.cloud module before importing
+      # vote_service, so Flask is the only real dependency; blt_regression is
+      # stdlib + the bundled tabulator.
+      - run: pip install flask==3.0.3
+
+      - name: Offline smoke test (routes, policy, admin surface)
+        run: python3 tools/smoke_test.py
+
+      - name: Tabulation regression (real BLT elections)
+        run: python3 tools/blt_regression.py
+
+      # The ballot and console are single files with inline JS and no build
+      # step, so a syntax error ships silently — the page just stops working.
+      - name: Syntax-check inline JS
+        run: |
+          python3 - <<'PY'
+          import re
+          js = re.search(r'<script>(.*)</script>',
+                         open('ballot_template.html').read(),
+                         re.S).group(1).replace('__Q7_NAMES__', '{}')
+          open('/tmp/ballot.js', 'w').write(js)
+          console = '\n'.join(m.group(1) for m in re.finditer(
+              r'<script>(.*?)</script>', open('admin_console.html').read(), re.S))
+          open('/tmp/console.js', 'w').write(console)
+          PY
+          node --check /tmp/ballot.js
+          node --check /tmp/console.js

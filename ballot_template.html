@@ -1019,7 +1019,14 @@ $("cast-btn").addEventListener("click",function(){
    var vf=$("done-conf");if(vf&&!isProv)vf.innerHTML="Connection acting up? Confirm this receipt was stored anytime: "+
     "<a href='"+api("/verify?receipt="+encodeURIComponent(d.receipt))+"' style='color:var(--color-dsa);font-weight:700;'>verify receipt "+esc(d.receipt)+"</a>.";
    show("scr-done");}
-  else if(d.status==="already_voted"){setErr($("cast-err"),"This code has already been used to vote. Votes are final.");}
+  else if(d.status==="already_voted"){
+   // The commonest cause is this voter's OWN submission landing while the
+   // reply was lost (flaky mobile data, VPN). Their ballot is recorded and
+   // they get no receipt from us — so send them somewhere useful instead of
+   // implying they were turned away.
+   setErr($("cast-err"),"This code has already been used to vote, and votes are final. "+
+    "If that was you a moment ago on a shaky connection, your ballot was recorded — your chapter's "+
+    "election administrator can confirm it and re-send your receipt. Otherwise contact them right away.");}
   else if(d.error==="invalid_answers"){setErr($("cast-err"),"Your ballot was missing an answer ("+(d.field||"?")+"). Go back and check each question.");}
   else if(d.error==="closed"||d.error==="not_open"){setErr($("cast-err"),d.message||"Voting is not open.");}
   else{setErr($("cast-err"),"Unable to record your vote. Please try again.");}})

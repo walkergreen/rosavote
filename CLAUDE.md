@@ -40,8 +40,9 @@ python3 tools/dev_server.py       # http://localhost:8080
 
 # syntax-check the template's inline JS after editing it:
 python3 -c "import re; open('/tmp/t.js','w').write(re.search(r'<script>(.*)</script>', open('ballot_template.html').read(), re.S).group(1).replace('__Q7_NAMES__','{}'))" && node --check /tmp/t.js
-# (this machine has no node — loading the page in a browser and checking the
-# console for errors is the fallback; same applies to admin_console.html)
+# (node lives at /opt/node22/bin/node on this machine; if it's ever missing,
+# loading the page and checking the console is the fallback. Same for
+# admin_console.html — extract every <script> block, then --check it.)
 
 # tabulation accuracy: regression over real BLT election files + live replay:
 python3 tools/blt_regression.py            # 40 real elections + 2 score/STAR fixtures, deterministic, 0 errors
@@ -191,7 +192,8 @@ regardless of window and refuse builder edits without an explicit
 ## Data model (Firestore, per poll_id)
 
 - `{poll}__codes` — key = SHA-256(code). `used`, `member_id`, `chapter`,
-  optional `reissued_from`. Repeatable per-chapter TEST codes live in
+  optional `reissued_from`, optional `weight` (carried across a reissue).
+  Repeatable per-chapter TEST codes live in
   `CHAPTERS[..]["test_code"]`, handled in code, never stored, never recorded.
 - `{poll}__ballots` — IDENTITY-LINKED (member_id, chapter, code_hash, comment)
   answers EXCEPT q7. Visible to admins + the voter's own chapter.
@@ -199,6 +201,27 @@ regardless of window and refuse builder edits without an explicit
   receipt, code_hash only (admin troubleshooting trace). ADMIN-ONLY; chapters
   never get access. Both ballot docs carry receipt/nonce/record_hash and a
   `voided` flag (never delete; excluded from tallies, kept in chain).
+  **DECIDED POLICY — secrecy is from CHAPTERS, not from national admins.**
+  The secret doc deliberately keeps TWO join keys back to the voter: the
+  shared `receipt` (paired with `{poll}__ballots.receipt` → member_id) and
+  `code_hash` (paired with `{poll}__codes` → member_id). An administrator
+  with database access can therefore de-anonymize a delegate ranking, and
+  that is intended — it preserves the troubleshooting trace and the
+  `secret_ballot_recorded` check. Art. V §5 secrecy here means the ranking is
+  withheld from chapters and never published by name; it is NOT
+  cryptographic unlinkability, and the app must not be described as if it
+  were. Do not "harden" this by stripping the join keys without a policy
+  change. What follows from it: the control is IAM, so keep raw Firestore
+  access (and PITR restores, and exports) to the smallest possible set of
+  people, and keep every admin path that touches the join audit-logged. The
+  app surface no longer *exercises* that capability by default — see
+  `admin_sees_answers` under Decided policy. The linkage exists for
+  troubleshooting under audit, not for routine reading.
+- Receipts are 64-bit (`new_receipt()`, 16 chars; provisionals `P`+56-bit).
+  The receipt is the lookup key for `verify`, `void`, and the published
+  `ballots.csv`, and the PROVISIONAL receipt is a document id — the old
+  32/28-bit receipts collided at chapter scale. Short legacy receipts still
+  validate and resolve; `void` refuses a receipt matching >1 ballot.
 - `{poll}__provisional` — sealed self-serve provisionals (name, all emails,
   phones, chapter, join date, alt names + full answers) pending adjudication.
 - `{poll}__audit_log` — append-only admin actions (void_reissue,
@@ -223,12 +246,50 @@ BLT export: `GET /admin/api/polls/<pid>/blt/<qkey>[?recount=1][&live=1]`
 (same gating as results); console Results tab has downloads + independent-
 verification instructions.
 
+## Visibility is PER QUESTION (three modes)
+
+One meeting can take a recorded vote on a motion and a secret ballot for
+officers, so `visibility` is a per-question field (`q_visibility()`,
+`VISIBILITIES`), not a poll-level setting:
+
+- `named` (DEFAULT, and what every pre-existing non-secret question does) —
+  identity-linked in `{poll}__ballots`; admins + the voter's own chapter;
+  only aggregates published.
+- `public` — same storage, plus a by-name ROLL CALL published at
+  `GET /p/<poll>/rollcall/<qkey>.csv` and rendered inline on the results page
+  (≤ `ROLLCALL_INLINE_MAX`; the CSV is always linked) and written into the
+  export zip. Voided ballots are listed and flagged, never dropped — a roll
+  call that omits a cancelled vote reads as if the member never voted.
+- `secret` — content in `{poll}__delegate_ballots` with no identity. The
+  contest's anonymous BLT is PUBLISHED at `/p/<poll>/verify/<qkey>.blt`
+  (rankings + weights, zero identity) so a secret election is still publicly
+  recountable — it previously wasn't, since secret answers never enter the
+  `ballots.csv` the public gets.
+
+`secret: true` remains the storage flag every downstream path reads, but it
+is now DERIVED from visibility in `_validate_questions` — set `visibility`,
+not `secret`. Legacy configs carrying `secret`/`delegate` and no `visibility`
+map to `secret` automatically. `text` questions are always `named` (prose can
+be neither anonymized nor safely published) and the builder disables the
+control for them. `delegate: true` pins `secret` (Art. V §5).
+
+Roll calls and secret BLTs both require finalized + results_published.
+
 ## Decided policy (do not silently change)
 
-- Visibility: Sections 1&3 recorded by name (admin + own chapter); delegate
-  ranking secret; national does NOT publish chapter results — each chapter
-  decides its own publication (never delegate rankings). Disclosed to voters
-  above Q1.
+- Visibility defaults: Sections 1&3 recorded by name (admin + own chapter);
+  delegate ranking secret; national does NOT publish chapter results — each
+  chapter decides its own publication (never delegate rankings). Disclosed to
+  voters above Q1. A body wanting a recorded vote sets `visibility: public`
+  on that question — it is opt-in per question, never a default.
+- ADMINS DO NOT SEE BALLOT CONTENT BY DEFAULT. Every admin remedy — void and
+  reissue, provisional adjudication, close-out, turnout, the integrity
+  counter — is a metadata operation and needs no answers. `admin_ballot_lookup`
+  returns per-question `recorded` yes/no plus a `blank` flag, which answers
+  "did my ballot land?" completely. Answers come back only for `public`
+  questions (published anyway) or when the poll sets `admin_sees_answers`
+  (per-poll opt-in, restores the pre-2026-07 behavior). Secret rankings are
+  never returned in any mode.
 - Votes final: no edit, no revote. Admin remedy = VOID-AND-REISSUE only
   (reasons whitelist: stolen_code, technical_failure,
   provisional_adjudication; open window only; audited; disclosed aggregate).
@@ -243,6 +304,26 @@ verification instructions.
   page inherits the delegate window.
 - Cost model on splash: SMS $0.0125/segment, email-first, two shrinking SMS
   reminder waves, postcards for no-email/no-phone tier. Realistic ~$2–5k.
+
+## Invariants worth not breaking
+
+- **A cast vote is ONE transaction.** `_cast_txn` burns the code AND writes
+  both ballot docs together. Splitting them (burn, then write) means any
+  failure in between leaves a used code with no ballot: the voter is
+  disenfranchised and cannot retry, because their code now reads as voted.
+  `_write_ballot_docs(..., txn=)` exists for exactly this; provisional
+  promotion uses the same seam via `_promote_txn`.
+- **`load_polls` fails CLOSED.** On a Firestore error it serves the last-good
+  cached config, never the `CHAPTERS` demo seed — falling back mid-election
+  would hand voters a different ballot (demo questions, demo test codes) for
+  the same poll_id. Only a completely unseeded collection uses the seed;
+  "every poll archived" legitimately means zero polls.
+- **Any read-modify-write of a config doc starts at `_fresh_cfg_doc()`**, not
+  `chapter_or_none()`. The latter is a 60s cache; writing it back rewrites
+  the whole document from a stale copy and reverts a concurrent builder save.
+- **Bulk Firestore writes go through `db.batch()`** (`BATCH_SIZE` 400, hard
+  cap 500). A round trip per document cannot finish a 20k roll — never mind
+  the 200k server-side cap — inside the Cloud Run request deadline.
 
 ## Gotchas
 

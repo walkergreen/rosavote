@@ -186,10 +186,12 @@
         <div id="voters-msg"></div>
         <hr style="margin:18px 0;border:none;border-top:1px solid rgba(0,0,0,.25)"/>
         <p class="kicker">Ballot lookup — troubleshooting (root only, audited)</p>
-        <p>Find a specific ballot by member ID or receipt. Shows the voter's
-        identity-linked answers (admin-visible by policy) and whether their
-        secret-ballot record exists — <b>never</b> the secret ranking. Voters
-        can also self-check at
+        <p>Find a specific ballot by member ID or receipt. Confirms <b>that</b>
+        each question was recorded, not <b>how</b> it was answered — enough to
+        resolve "did my ballot land?" without reading anyone's vote. Answers
+        appear only for questions this body publishes by name, or if the poll
+        sets <code>admin_sees_answers</code>. Secret rankings are never shown.
+        Voters can also self-check at
         <code>/p/&lt;poll&gt;/verify?receipt=XXXX</code> (public, status only).</p>
         <div class="row">
           <div><label>Member ID</label><input type="text" id="lookup-member" placeholder="AK12345"/></div>
@@ -298,6 +300,12 @@
           <input type="text" id="qe-label" placeholder="Ballot measure"/>
           <label>Description <small>(optional — paragraphs separated by a blank line)</small></label>
           <textarea id="qe-desc" style="min-height:70px;font-family:var(--ui)"></textarea>
+          <label>Who may see how each member voted? <button type="button" class="info-i" data-info="visibility" aria-label="Visibility">i</button></label>
+          <select id="qe-visibility">
+            <option value="named">Recorded by name — administrators and the member's own chapter (default)</option>
+            <option value="public">Published roll call — how each member voted is public</option>
+            <option value="secret">Secret ballot — content stored with no identity</option>
+          </select>
           <div id="qe-ranked">
             <div class="row">
               <div><label>Seats to elect</label><input type="number" id="qe-seats" min="1" value="1"/></div>
@@ -313,7 +321,7 @@
                 <option value="replacement">Replacement re-run — winners removed</option></select></div>
             </div>
             <div class="row" style="margin-top:8px">
-              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
+              <div hidden><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
               <div><label style="display:inline">Delegate election (Art. V) </label><input type="checkbox" id="qe-delegate" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="delegate" aria-label="Delegate election">i</button></div>
               <div><label style="display:inline">Shuffle order per voter </label><input type="checkbox" id="qe-shuffle" style="width:18px;height:18px" checked/></div>
             </div>
@@ -331,7 +339,7 @@
                 <option value="star_pr">STAR-PR (proportional, Allocated Score)</option></select></div>
             </div>
             <div class="row" style="margin-top:8px">
-              <div><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-s-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
+              <div hidden><label style="display:inline">Secret ballot </label><input type="checkbox" id="qe-s-secret" style="width:18px;height:18px"/><button type="button" class="info-i" data-info="secret" aria-label="Secret ballot">i</button></div>
               <div><label style="display:inline">Shuffle order per voter </label><input type="checkbox" id="qe-s-shuffle" style="width:18px;height:18px" checked/></div>
               <div><label style="display:inline">Require every candidate scored </label><input type="checkbox" id="qe-s-full" style="width:18px;height:18px" checked/><button type="button" class="info-i" data-info="scorefull" aria-label="Require every candidate scored">i</button></div>
             </div>
@@ -569,6 +577,21 @@ var INFO = {
     "unrepresented group; replacement tends toward the largest bloc's next choice). When a "+
     "delegate actually resigns and you know who, the most faithful option is neither — use the "+
     "results-page <b>dropout recount</b> to remove that specific person and recount."],
+  visibility: ["Who may see how each member voted",
+    "Set per question, because one meeting can take a recorded vote on a motion and a "+
+    "secret ballot for officers.<br/><br/>"+
+    "<b>Recorded by name</b> (default) — the answer is stored with the member's id and "+
+    "chapter. Administrators and that member's own chapter can see it; the public results "+
+    "page shows aggregate counts only.<br/><br/>"+
+    "<b>Published roll call</b> — the same storage, but the public results page and a "+
+    "downloadable CSV list how every member voted, by name. Use this where the body's rules "+
+    "<i>require</i> a recorded vote. It cannot be undone after publication.<br/><br/>"+
+    "<b>Secret ballot</b> — the answer goes to a separate collection with no member name and "+
+    "no chapter. The contest's anonymous ballot file is published so anyone can recount it, "+
+    "but no one can tell who cast which ballot from it. Required for convention delegates "+
+    "(Const. Art. V §5).<br/><br/>"+
+    "Free-text questions are always recorded by name — prose can be neither anonymized nor "+
+    "safely published."],
   secret: ["Secret ballot",
     "A secret-ballot question is stored in a separate collection with <b>no member name and "+
     "no chapter</b> attached — only a random receipt and a code hash for troubleshooting. "+
@@ -1031,6 +1054,11 @@ function openEditor(type, idx){
   $("qe-heading").textContent = (editIdx===null?"New ":"Edit ")+(TYPE_NAMES[type]||type)+" question";
   $("qe-title").value = q.title||""; $("qe-label").value = q.label||"";
   $("qe-desc").value = (q.text||[]).join("\n\n");
+  // visibility drives the storage split; legacy configs carry secret/delegate
+  // instead of the field, so derive it the same way the server does.
+  $("qe-visibility").value = q.visibility || ((q.secret||q.delegate) ? "secret" : "named");
+  $("qe-visibility").disabled = (type==="text");   // free text is always named
+  if(type==="text") $("qe-visibility").value = "named";
   $("qe-ranked").style.display = type==="ranked" ? "" : "none";
   $("qe-score").style.display = type==="score" ? "" : "none";
   $("qe-optwrap").style.display = (type==="ranked"||type==="multi"||type==="score") ? "" : "none";
@@ -1155,6 +1183,13 @@ $("qe-save").onclick = function(){
     if(editIdx!==null && BQ[editIdx].quota_group) q.quota_group = BQ[editIdx].quota_group;
   }
   if(type==="text") q.max = parseInt($("qe-max").value,10)||1000;
+  if(type!=="text"){
+    // Visibility is the single control; `secret` is the storage flag derived
+    // from it. A delegate election is secret by constitutional rule, so it
+    // pins the selector rather than the other way round.
+    q.visibility = q.delegate ? "secret" : $("qe-visibility").value;
+    if(q.visibility==="secret") q.secret = true; else delete q.secret;
+  }
   if(editIdx===null) BQ.push(q); else BQ[editIdx] = q;
   $("q-editor").classList.add("hide"); editIdx = null; editingLegacy = null;
   renderQList();
@@ -1618,12 +1653,25 @@ $("publish-btn").onclick = function(){
   var pub = !c.results_published;
   if(!confirm(pub ? "PUBLISH the public results page for "+c.name+"?\nAnyone with the link "+location.origin+"/p/"+pid+"/results can view outcomes and aggregate counts (never individual ballots)."
                   : "UNPUBLISH the public results page for "+c.name+"?")) return;
-  api("/admin/api/polls/"+pid+"/publish", {method:"POST", body: JSON.stringify({publish: pub})}).then(function(r){
+  doPublish(pid, pub, false);
+};
+function doPublish(pid, pub, force){
+  api("/admin/api/polls/"+pid+"/publish", {method:"POST", body: JSON.stringify({publish: pub, force: !!force})}).then(function(r){
     if(r.status===200){
       msg("results-msg","okc", pub ? ("Published — share this link with voters:\n"+location.origin+r.body.url)
                                    : "Public results page unpublished.");
       loadPolls();
-    } else msg("results-msg","err",(r.body.message||JSON.stringify(r.body)));
+      return;
+    }
+    if(r.status===409 && r.body.error==="provisionals_pending"){
+      // Publishing freezes the tally; a pending provisional would never appear in it.
+      if(confirm(r.body.pending+" provisional ballot(s) are still awaiting adjudication.\n\n"+
+                 "Publishing now freezes a result that EXCLUDES them. Adjudicate the queue first "+
+                 "unless you have a reason not to.\n\nPublish anyway?")) doPublish(pid, pub, true);
+      else msg("results-msg","warn","Not published — clear the adjudication queue first.");
+      return;
+    }
+    msg("results-msg","err",(r.body.message||JSON.stringify(r.body)));
   });
 };
 $("blt-refresh").onclick = function(){
@@ -1724,9 +1772,16 @@ $("lookup-btn").onclick = function(){
     if(!r.body.found){ v.innerHTML = "<div class='msg warn'>No ballot found. If their code shows used but no "+
       "ballot exists, that's an integrity incident — check the Voters integrity counter.</div>"; return; }
     v.innerHTML = r.body.ballots.map(function(b){
-      var rows = Object.keys(b.answers||{}).map(function(k){
-        return "<br/>"+esc(k)+": <b>"+esc(Array.isArray(b.answers[k])?b.answers[k].join(" > "):b.answers[k])+"</b>";
+      // Answers are off by default — recorded-yes/no per question is what
+      // troubleshooting actually needs, and it reveals nothing about content.
+      var rows = Object.keys(b.recorded||{}).map(function(k){
+        var shown = b.answers && (k in b.answers);
+        return "<br/>"+esc(k)+": "+(shown
+          ? "<b>"+esc(Array.isArray(b.answers[k])?b.answers[k].join(" > "):b.answers[k])+"</b>"
+          : (b.recorded[k] ? "<b>✓ recorded</b> <small>(content not shown)</small>"
+                           : "<small>— no answer</small>"));
       }).join("");
+      if(b.blank) rows += "<br/><b class='chip'>FULLY BLANK BALLOT</b>";
       var cms = Object.keys(b.comments||{}).filter(function(k){ return b.comments[k]; })
         .map(function(k){ return "<br/>"+esc(k)+" (text): <em>"+esc(b.comments[k])+"</em>"; }).join("");
       return "<div class='provrow'><b>"+esc(b.receipt)+"</b> · "+esc(b.member_id||"?")+" · "+esc(b.chapter||"")+
