@@ -1467,4 +1467,35 @@ ok("</script>" not in _qdef_blob and "\\u003c" in _qdef_blob,
 ok('value="</script>' not in _page and 'value="&lt;/script&gt;' in _page,
    "chapter name is HTML-escaped in the attribute context")
 
+# ---- untrusted roll fields can't corrupt or weaponize the export CSV ----
+ok(vote_service._csv_cell("AK1,999") == '"AK1,999"',
+   "a comma in member_id stays one CSV column")
+ok(vote_service._csv_cell('=HYPERLINK("http://evil/")').startswith("\"'="),
+   "a formula-prefixed cell is neutralized for Excel/Sheets")
+for _pfx in ("=", "+", "-", "@"):
+    ok(vote_service._csv_cell(_pfx + "x").startswith("\"'" + _pfx),
+       f"leading {_pfx!r} neutralized")
+_ezip = c.get("/admin/api/polls/special_ref/export.zip", headers=hdr)
+_ebal = _zip2.ZipFile(_io2.BytesIO(_ezip.data)).read("ballots.csv").decode()
+ok(all(len(r) == len(_ebal.splitlines()[0].split(",")) for r in
+       __import__("csv").reader(_ebal.splitlines()[1:]) if r),
+   "export ballots.csv rows all match the header's column count")
+
+# ---- per-IP throttles key on a proxy-written hop, not a spoofable one ----
+def _ip_for(xff, peer="203.0.113.9"):
+    with vote_service.app.test_request_context(
+            "/", environ_base={"REMOTE_ADDR": peer},
+            headers=({"X-Forwarded-For": xff} if xff else {})):
+        return vote_service._client_ip()
+ok(_ip_for("9.9.9.9, 203.0.113.9") == "203.0.113.9",
+   "client-supplied X-Forwarded-For prefix is ignored")
+ok(_ip_for("a, b, c, 203.0.113.9") == "203.0.113.9",
+   "multiple spoofed hops can't walk past the trusted one")
+ok(_ip_for(None) == "203.0.113.9", "no XFF falls back to the peer address")
+vote_service._prov_hits.clear()
+_n = sum(vote_service._prov_throttled(_ip_for(f"spoof{i}, 203.0.113.9"))
+         for i in range(12))
+vote_service._prov_hits.clear()
+ok(_n > 0, "rotating X-Forwarded-For no longer bypasses the provisional throttle")
+
 print(f"SMOKE TEST: all {passed} checks passed")

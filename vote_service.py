@@ -1695,9 +1695,28 @@ def _prov_throttled(ip: str) -> bool:
     return False
 
 
+# X-Forwarded-For is CLIENT-SUPPLIED up to the point a trusted proxy appends
+# to it. Cloud Run appends the real peer to whatever the caller sent, so the
+# LEFTMOST entry is attacker-chosen and the RIGHTMOST entries are the ones our
+# own infrastructure wrote. Reading the leftmost entry made every per-IP
+# throttle bypassable by rotating a header value. Count in from the right
+# instead: TRUSTED_PROXY_HOPS is how many proxies append to XFF in front of the
+# app (Cloud Run direct = 1; add 1 if an external HTTPS LB / Cloud Armor sits
+# in front, per infra/STAGING_AND_EDGE.md).
+try:
+    TRUSTED_PROXY_HOPS = max(1, int(os.environ.get("TRUSTED_PROXY_HOPS", "1")))
+except (TypeError, ValueError):
+    TRUSTED_PROXY_HOPS = 1
+
+
 def _client_ip() -> str:
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or "?"
+    parts = [p.strip() for p in request.headers.get("X-Forwarded-For", "").split(",")
+             if p.strip()]
+    if parts:
+        # the entry our outermost trusted proxy appended; clamp so a short
+        # header can never walk back into caller-controlled territory
+        return parts[max(0, len(parts) - TRUSTED_PROXY_HOPS)]
+    return request.remote_addr or "?"
 
 
 @app.post("/p/<poll_id>/provisional")
@@ -3872,8 +3891,12 @@ def admin_export_zip(poll_id):
                    str(bool(d.get("voided"))), str(bool(d.get("provisional"))),
                    str(_ballot_weight(d, weights))]
             if not anonymize:
-                row += [str(d.get("member_id") or ""),
-                        '"' + str(d.get("chapter") or "").replace('"', '""') + '"']
+                # member_id/chapter come from an uploaded roll — untrusted.
+                # Unquoted, a comma shifts every later column (the election
+                # record silently misaligns); a leading =/+/-/@ executes when
+                # staff open the package in Excel or Sheets. Same treatment
+                # _manifest_csv and _roll_call_csv already apply.
+                row += [_csv_cell(d.get("member_id")), _csv_cell(d.get("chapter"))]
             lines.append(",".join(row))
         z.writestr("ballots.csv", "\n".join(lines) + "\n")
         # by-name roll call for every question this body publishes by name
