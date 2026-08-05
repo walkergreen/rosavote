@@ -193,7 +193,9 @@ ok(not unclassified,
    "every route is classified in ROUTE_CLASS "
    f"(unclassified: {unclassified})")
 
-DENIED = (401, 403)
+# 429 (auth throttle) is also a refusal: the endpoint served no data.
+DENIED = (401, 403, 429)
+vote_service._auth_hits.clear()   # deterministic start for the matrix
 for rule in sorted(rules, key=lambda r: r.rule):
     kind = ROUTE_CLASS.get(rule.rule)
     if kind is None:
@@ -513,6 +515,40 @@ o1 = c.post("/prefs/optout", json={"contact": "a@example.com"})
 o2 = c.post("/prefs/optout", json={"contact": "zzz@example.com"})
 ok(o1.status_code == o2.status_code and o1.data == o2.data,
    "opt-out is enumeration-safe")
+
+section("F3. suppressing delivery requires the member's own signed link")
+# a TYPED contact must not be able to suppress delivery (ballot-delivery DoS)
+ok(c.post("/prefs/optout", json={"contact": "target@example.com"}).status_code == 400
+   and not vote_service._is_suppressed("target@example.com"),
+   "a typed contact cannot opt out")
+tok = vote_service._prefs_token("target@example.com", "optout")
+ok(c.post("/prefs/optout", json={"token": tok}).status_code == 200
+   and vote_service._is_suppressed("target@example.com"),
+   "the member's signed opt-out link suppresses delivery")
+ok(c.post("/prefs/optin", json={"token": tok}).status_code == 400,
+   "an opt-out token is action-bound (cannot be replayed to opt in)")
+tampered = tok[:-1] + ("0" if tok[-1] != "0" else "1")
+ok(vote_service._prefs_verify(tampered) is None, "a tampered signature is rejected")
+ok(vote_service._prefs_verify("garbage") is None
+   and vote_service._prefs_verify(vote_service._b64u(b"optout|x") + ".deadbeef") is None,
+   "unsigned / wrong-signature tokens do not verify")
+# the confirmation page can't leak markup via the masked contact
+mp = c.get("/prefs?t=" + vote_service._prefs_token("<b>x@y.co", "optout")).data.decode()
+ok("<b>x@y" not in mp, "masked contact on the prefs page is inert")
+
+section("F4. admin sign-in attempts are throttled (brute force / read amplification)")
+vote_service._auth_hits.clear()
+codes = [c.get("/admin/api/whoami", headers={"X-Admin-Token": f"wrong-{i}"}).status_code
+         for i in range(vote_service.ADMIN_AUTH_MAX_FAILS + 4)]
+ok(429 in codes, "repeated invalid admin tokens from one address are eventually throttled")
+ok(codes[0] in (401, 403), "the first invalid attempt is a normal auth failure, not a throttle")
+# a VALID token is never collaterally blocked by a noisy neighbour on the same IP
+ok(c.get("/admin/api/whoami", headers=NATIONAL).status_code == 200,
+   "a valid token still passes while invalid ones from the same IP are locked out")
+# ...and a valid sign-in clears the streak
+ok(c.get("/admin/api/whoami", headers=BAD_TOKEN).status_code in (401, 403),
+   "after a valid sign-in resets the counter, invalid attempts start fresh")
+vote_service._auth_hits.clear()
 
 # security headers on every response
 h = c.get("/").headers

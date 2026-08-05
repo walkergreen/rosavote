@@ -1112,15 +1112,27 @@ ok(c.get("/p/vf_poll/verify/ballots.csv").status_code == 200
 ok(c.get("/p/vf_poll/verify/secrets.env").status_code == 404,
    "verification route only serves the three known files")
 
-# ---- notification opt-out / opt-in ----
+# ---- notification opt-out / opt-in (signed links only) ----
 ok(c.get("/prefs").status_code == 200 and "Notification preferences" in c.get("/prefs").data.decode(),
    "prefs page renders")
-ok(c.post("/prefs/optout", json={"contact": "Opt@Out.org"}).get_json() == {"status": "ok"},
-   "optout is enumeration-safe (generic ok)")
+# a TYPED contact can no longer suppress delivery — that was a ballot-delivery
+# denial vector; only the member's own signed link acts.
+ok(c.post("/prefs/optout", json={"contact": "Opt@Out.org"}).status_code == 400
+   and not vote_service._is_suppressed("opt@out.org"),
+   "a typed contact cannot opt out (signed link required)")
+_ootok = vote_service._prefs_token("Opt@Out.org", "optout")
+ok(c.post("/prefs/optout", json={"token": _ootok}).get_json() == {"status": "ok"},
+   "the member's signed opt-out link suppresses the (normalized) contact")
 ok(vote_service._is_suppressed("opt@out.org") is True,
    "opt-out suppresses the (normalized) contact")
-ok(c.post("/prefs/optin", json={"contact": "opt@out.org"}).get_json() == {"status": "ok"}
-   and vote_service._is_suppressed("opt@out.org") is False, "opt-in re-enables it")
+# an opt-out token cannot be replayed to re-enable, and vice versa
+ok(c.post("/prefs/optin", json={"token": _ootok}).status_code == 400
+   and vote_service._is_suppressed("opt@out.org") is True,
+   "opt-out token is action-bound (cannot opt back in)")
+_oitok = vote_service._prefs_token("opt@out.org", "optin")
+ok(c.post("/prefs/optin", json={"token": _oitok}).get_json() == {"status": "ok"}
+   and vote_service._is_suppressed("opt@out.org") is False,
+   "the matching opt-in link re-enables it")
 # suppressed contact is skipped by the mass send + the in-app resend
 _sup = _sc.run([{"member_id": "Z", "poll_id": "p", "chapter": "x", "channel": "email",
                  "destination": "opt@out.org", "vote_link": "https://v"}],

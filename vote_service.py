@@ -19,8 +19,10 @@ Shared ballot definition lives in ONE place (BALLOT), so every chapter votes
 on identical wording. Per-chapter config (name, window) lives in CHAPTERS.
 """
 
+import base64
 import calendar
 import hashlib
+import hmac
 import json
 import os
 import random
@@ -29,7 +31,7 @@ import secrets
 import time
 from datetime import date, timedelta
 
-from flask import Flask, request, jsonify, Response, redirect
+from flask import Flask, request, jsonify, Response, redirect, g
 from google.cloud import firestore
 from google.api_core import exceptions as gcloud_exc
 
@@ -1051,30 +1053,116 @@ def _set_suppressed(contact: str, suppressed: bool):
         {"suppressed": suppressed, "at": firestore.SERVER_TIMESTAMP})
 
 
-@app.post("/prefs/optout")
-def prefs_optout():
-    """Stop contacting an email/phone. Enumeration-safe (always {status:ok});
-    the caller can only act on a contact they can type, and this suppresses
-    delivery to it, never reveals membership."""
-    contact = _norm_contact((request.get_json(silent=True) or {}).get("contact"))
+# ---- signed opt-out tokens -----------------------------------------------
+# Suppressing delivery to a contact is a DELIVERY DENIAL: a member whose
+# email/phone is suppressed stops receiving their ballot. So opt-out must be
+# authenticated by POSSESSION OF THE MEMBER'S OWN LINK, not by typing an
+# address anyone can guess. Each ballot message carries a per-contact signed
+# link; only that link can suppress (or restore) that contact. Enumeration-safe
+# and action-bound (an opt-out token can't be replayed as opt-in).
+#
+# Signing key: PREFS_SIGNING_KEY if set, else derived from ADMIN_TOKEN so a
+# normal deployment needs no extra config. Rotating either invalidates
+# outstanding links (they simply stop verifying — fail closed, never open).
+PREFS_ACTIONS = ("optout", "optin")
+_PREFS_FALLBACK_SECRET = secrets.token_bytes(32)   # dev only: no stable secret
+
+
+def _prefs_secret() -> bytes:
+    k = os.environ.get("PREFS_SIGNING_KEY", "").strip()
+    if k:
+        return k.encode()
+    if ADMIN_TOKEN:
+        return hashlib.sha256(b"rosavote-prefs-v1|" + ADMIN_TOKEN.encode()).digest()
+    return _PREFS_FALLBACK_SECRET
+
+
+def _b64u(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_dec(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _prefs_token(contact: str, action: str) -> str:
+    payload = f"{action}|{_norm_contact(contact)}".encode()
+    sig = hmac.new(_prefs_secret(), payload, hashlib.sha256).hexdigest()[:32]
+    return f"{_b64u(payload)}.{sig}"
+
+
+def _prefs_verify(token: str):
+    """Return (action, contact) for a valid token, else None."""
+    try:
+        b64, sig = str(token or "").split(".", 1)
+        payload = _b64u_dec(b64)
+        action, contact = payload.decode().split("|", 1)
+    except Exception:
+        return None
+    if action not in PREFS_ACTIONS:
+        return None
+    good = hmac.new(_prefs_secret(), payload, hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, good):
+        return None
+    return action, contact
+
+
+def prefs_optout_url(base_url: str, contact: str) -> str:
+    """The per-member unsubscribe link to drop into a ballot email/SMS footer.
+    Only this link (not a typed address) can suppress this contact."""
+    return f"{base_url.rstrip('/')}/prefs?t={_prefs_token(contact, 'optout')}"
+
+
+def _mask_contact(c: str) -> str:
+    """A recognizable-but-not-full rendering, so the confirmation page shows
+    which contact without splashing the whole address across logs/history."""
+    c = _norm_contact(c)
+
+    def _lead(s):   # first alphanumeric char only — never markup
+        return (s[:1] if s[:1].isalnum() else "*")
+
+    if "@" in c:
+        user, _, dom = c.partition("@")
+        host, _, tld = dom.rpartition(".")
+        tld = "".join(ch for ch in tld if ch.isalnum())[:8]
+        return _lead(user) + "***@" + _lead(host) + "***" + (f".{tld}" if tld else "")
+    digits = "".join(ch for ch in c if ch.isdigit())
+    return "***-***-" + digits[-4:] if len(digits) >= 4 else "***"
+
+
+def _prefs_apply(want_action: str, suppressed: bool):
+    v = _prefs_verify((request.get_json(silent=True) or {}).get("token"))
+    if not v or v[0] != want_action:
+        # no contact was ever revealed to an unsigned caller, so this leaks
+        # nothing; it simply refuses to act without the member's own link.
+        return jsonify({"status": "error",
+                        "message": "This link is invalid or has expired. Use the "
+                                   "unsubscribe link from your most recent RosaVote "
+                                   "message, reply STOP to a text, or contact your "
+                                   "chapter."}), 400
+    contact = v[1]
     if len(contact) >= 3:
         try:
-            _set_suppressed(contact, True)
+            _set_suppressed(contact, suppressed)
         except Exception:
             pass
     return jsonify({"status": "ok"}), 200
+
+
+@app.post("/prefs/optout")
+def prefs_optout():
+    """Stop contacting an email/phone. REQUIRES the member's signed opt-out
+    token (from the unsubscribe link in their own email/text) — a typed
+    address is refused, because suppressing delivery is a way to keep a member
+    from getting their ballot."""
+    return _prefs_apply("optout", True)
 
 
 @app.post("/prefs/optin")
 def prefs_optin():
-    """Re-enable contact to an email/phone."""
-    contact = _norm_contact((request.get_json(silent=True) or {}).get("contact"))
-    if len(contact) >= 3:
-        try:
-            _set_suppressed(contact, False)
-        except Exception:
-            pass
-    return jsonify({"status": "ok"}), 200
+    """Resume contact — also token-gated (the confirmation page hands back a
+    matching opt-in link after an opt-out)."""
+    return _prefs_apply("optin", False)
 
 
 _PREFS_PAGE = """<!doctype html>
@@ -1095,39 +1183,61 @@ button{font-family:"Arial Narrow",sans-serif;font-weight:bold;text-transform:upp
 .r{font-weight:bold;margin:8px 0 0}a{color:#dd1111}</style></head><body>
 <div class="banner"><img src="/logo.svg" alt="" style="height:26px;vertical-align:-7px;margin-right:6px"/>RosaVote</div>
 <main><h1>Notification preferences</h1>
-<div class="card">
-<p>Manage whether RosaVote contacts a specific email address or mobile number for
-DSA elections. Enter the contact and choose an option.</p>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
-  <input id="cc" placeholder="you@email or 555-123-4567" style="flex:1;min-width:200px"/>
-</div>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
-  <button class="out" id="bout" type="button">Stop contacting this</button>
-  <button class="in" id="bin" type="button">Resume contacting this</button>
-</div>
+<div class="card" id="ctx-card">
+<p id="lead"></p>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button id="act" type="button"></button></div>
 <p class="r" id="msg" aria-live="polite"></p>
+</div>
 <div class="warn"><b>Important:</b> your ballot is delivered by these same channels.
 If you opt an address out, make sure you can still receive your ballot another way
 (email, text, or postcard) — otherwise you may not be able to vote. Opting out of a
 text is also as simple as replying <b>STOP</b>; reply <b>START</b> to resume.</div>
-</div>
 <p><a href="/">&larr; RosaVote</a></p></main>
 <script>
-(function(){function esc(t){return String(t).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
- function post(path,label){var v=(document.getElementById("cc").value||"").trim();
-  var m=document.getElementById("msg");if(v.length<3){m.textContent="Enter an email or mobile number.";return;}
-  m.textContent="Saving\\u2026";
-  fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contact:v})})
-   .then(function(){m.textContent=label;}).catch(function(){m.textContent="Network error \\u2014 try again.";});}
- document.getElementById("bout").addEventListener("click",function(){post("/prefs/optout","Done \\u2014 we won't contact that email/number for elections. You can resume anytime here.");});
- document.getElementById("bin").addEventListener("click",function(){post("/prefs/optin","Done \\u2014 that email/number can receive election messages again.");});
+(function(){
+ var CTX=__PREFS_CTX__;   // {action,endpoint,reverse,reverse_endpoint,token,reverse_token,masked} or null
+ var lead=document.getElementById("lead"),act=document.getElementById("act"),msg=document.getElementById("msg");
+ function labelFor(a){return a==="optout"?"Stop these messages":"Resume these messages";}
+ function render(a,tok,ep,masked){
+  lead.innerHTML=(a==="optout"
+    ?"Confirm you want RosaVote to <b>stop</b> sending election messages to <b>"
+    :"Confirm you want RosaVote to <b>resume</b> election messages to <b>")+masked+"</b>.";
+  act.textContent=labelFor(a);act.className=a==="optout"?"out":"in";
+  act.onclick=function(){msg.textContent="Saving\\u2026";
+   fetch(ep,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:tok})})
+    .then(function(r){return r.json();}).then(function(d){
+     if(d.status==="ok"){msg.textContent=a==="optout"
+       ?"Done \\u2014 we won't send election messages to that contact.":"Done \\u2014 messages resumed.";
+      if(CTX&&CTX.reverse){render(CTX.reverse,CTX.reverse_token,CTX.reverse_endpoint,CTX.masked);CTX=null;}
+      else{act.style.display="none";}}
+     else msg.textContent=d.message||"That link is invalid or expired.";
+    }).catch(function(){msg.textContent="Network error \\u2014 try again.";});};
+ }
+ if(CTX){render(CTX.action,CTX.token,CTX.endpoint,CTX.masked);}
+ else{lead.innerHTML="To change whether RosaVote contacts you for elections, use the "
+   +"<b>unsubscribe link</b> at the bottom of your most recent RosaVote email or text. "
+   +"For a text you can also reply <b>STOP</b> (or <b>START</b> to resume). Still stuck? "
+   +"Contact your chapter\\u2019s elections committee.";
+  act.style.display="none";}
 })();
 </script></body></html>"""
 
 
 @app.get("/prefs")
 def prefs_page():
-    return Response(_PREFS_PAGE.replace("__NONE__", ""), mimetype="text/html")
+    tok = request.args.get("t", "")
+    v = _prefs_verify(tok) if tok else None
+    if not v:
+        ctx = None
+    else:
+        action, contact = v
+        reverse = "optin" if action == "optout" else "optout"
+        ctx = {"action": action, "endpoint": f"/prefs/{action}",
+               "reverse": reverse, "reverse_endpoint": f"/prefs/{reverse}",
+               "token": tok, "reverse_token": _prefs_token(contact, reverse),
+               "masked": _mask_contact(contact)}
+    return Response(_PREFS_PAGE.replace("__PREFS_CTX__", _js_json(ctx)),
+                    mimetype="text/html")
 
 
 def _norm_contact(c: str) -> str:
@@ -2298,10 +2408,75 @@ def _admin_identity(token: str):
             "polls": list(d.get("polls") or [])}
 
 
+# ---- admin auth throttle -------------------------------------------------
+# A presented-but-invalid admin token is a sign-in attempt. Each one costs a
+# Firestore read (config__admins lookup), and operator-chosen tokens may be as
+# short as 12 chars, so unlimited attempts allow both online brute force and a
+# read-amplification nuisance. Lock an address out after too many FAILED
+# attempts in a window — but never block a VALID token, so a legitimate admin
+# behind the same NAT as an attacker is not collaterally locked out (the gate
+# below checks the token first and only 429s an attempt that is itself invalid).
+ADMIN_AUTH_MAX_FAILS = max(1, int(os.environ.get("ADMIN_AUTH_MAX_FAILS", "10") or 10))
+ADMIN_AUTH_WINDOW_S = max(1, int(os.environ.get("ADMIN_AUTH_WINDOW_S", "300") or 300))
+_auth_hits: dict = {}
+
+
+def _auth_recent(ip: str) -> list:
+    now = time.time()
+    if len(_auth_hits) > 10000:                # bound memory: drop stale keys
+        for k, v in list(_auth_hits.items()):
+            if not [t for t in v if now - t < ADMIN_AUTH_WINDOW_S]:
+                _auth_hits.pop(k, None)
+    return [t for t in _auth_hits.get(ip, ()) if now - t < ADMIN_AUTH_WINDOW_S]
+
+
+def _auth_locked(ip: str) -> bool:
+    return len(_auth_recent(ip)) >= ADMIN_AUTH_MAX_FAILS
+
+
+def _auth_fail(ip: str):
+    hits = _auth_recent(ip)
+    hits.append(time.time())
+    _auth_hits[ip] = hits
+
+
+def _auth_ok(ip: str):
+    _auth_hits.pop(ip, None)                    # a valid sign-in clears the streak
+
+
+@app.before_request
+def _admin_auth_gate():
+    """Resolve the admin token once per request and throttle brute force.
+    Guards only the token-gated admin surface; the console shell and every
+    public path are untouched. A valid token always passes (and resets the
+    failure streak); an invalid token is counted, and once an address is over
+    the limit its further INVALID attempts get 429 — valid ones never do."""
+    path = request.path
+    if not (path.startswith("/admin/api/") or path.endswith("/admin/void")):
+        return None
+    tok = request.headers.get("X-Admin-Token", "")
+    ident = _admin_identity(tok) if tok else None
+    g.admin_ident = ident
+    ip = _client_ip()
+    if ident is not None:
+        _auth_ok(ip)
+        return None
+    if tok:                                     # a real (failed) sign-in attempt
+        if _auth_locked(ip):
+            return jsonify({"error": "too_many_auth_attempts",
+                            "message": "Too many failed admin sign-ins from this "
+                                       "address. Wait a few minutes and try again."}), 429
+        _auth_fail(ip)
+    return None
+
+
 def require_admin(poll_id: str = None, national_only: bool = False):
     """Resolve the caller's admin identity, or None if unauthorized.
-    Chapter-scoped tokens only reach polls in their own list."""
-    ident = _admin_identity(request.headers.get("X-Admin-Token", ""))
+    Chapter-scoped tokens only reach polls in their own list. Reuses the
+    identity the before_request gate already resolved (so no double lookup)."""
+    ident = getattr(g, "admin_ident", None)
+    if ident is None:
+        ident = _admin_identity(request.headers.get("X-Admin-Token", ""))
     if not ident:
         return None
     if ident["role"] == "national":
