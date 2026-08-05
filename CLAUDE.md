@@ -91,9 +91,8 @@ gunicorn. Firestore Native lives in `rosavote-app` (us-east1). Cloud Run runs as
   __Q8_QUESTION__ __Q7_OPTIONS__ __Q7_NOTE__ __Q7_SEATS__ __Q7_ALTS__
   __Q7_NAMES__ __HELP_SUBJECT__`.
 - `tools/` — `generate_codes.py` (roll → hashed codes + delivery manifest,
-  wired to `proj-tmc-mem-dsa.main.ak_primary_id` joined to
-  `ak_user_fields_pivoted` for chapter; eligibility = is_primary + "Member in
-  Good Standing"; fetches via the `bq` CLI so plain gcloud auth works —
+  wired to a BigQuery membership warehouse via a configurable roll query
+  (built-in neutral example schema; --roll-query FILE to override); fetches via the `bq` CLI so plain gcloud auth works —
   `--write` (Firestore code docs) still needs ADC; email-first channel
   ladder; PII only ever goes to output files, stdout is aggregate counts,
   tracebacks are diverted to a local log),
@@ -278,18 +277,16 @@ deletion).
    close-out), scoped chapter-admin tokens. Still open from this item:
    roll picker + code gen in the console (blocked on roadmap #2).
 2. ~~Wire generate_codes.py to the real roll~~ DONE (2026-07-19):
-   `ak_primary_id` (124,596 eligible primaries at wiring time; ~100% email
-   coverage) + `ak_user_fields_pivoted.chapter` (241 chapters; matched to
+   the deduplicated primary-member roll (~125k eligible primaries at wiring
+   time; ~100% email coverage) + its chapter field (241 chapters; matched to
    polls by `roll_chapter`/`name`). Open: a real `--write` run needs ADC
    (`gcloud auth application-default login`, or run from a service account).
 3. ~~Ops hardening~~ MOSTLY DONE (2026-07-19): deployed member-ballot-v3
    (max-instances 20, ADMIN_TOKEN via Secret Manager secret
    `ballot-admin-token`), Cloud Scheduler job `ballot-closeout` (every 15
    min → /admin/api/cron/closeout), $25/mo budget w/ 50/90/100% alerts.
-   Still open: Cloud Armor needs an external HTTPS LB + domain
-   (vote.dsausa.org) — decision pending; heavy close-out export (chain/BLT
-   to GCS) still manual via tools/.
+   Still open: Cloud Armor needs an external HTTPS LB in front of the
+   domain — decision pending; heavy close-out export (chain/BLT to GCS)
+   still manual via tools/.
 4. Human screen-reader pass (VoiceOver/TalkBack/NVDA) before any public WCAG
    conformance claim — see tools/accessibility_results.md.
-5. Resolve wgreen@dsausa.org "Gaia id not found" org-access issue (blocks
-   real IAM admin identity).

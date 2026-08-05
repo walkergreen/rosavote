@@ -47,7 +47,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--poll", required=True)
     ap.add_argument("--question", required=True, help="the ranked question key (e.g. co / al)")
-    ap.add_argument("--fs-project", default="dsa-org-tools")
+    ap.add_argument("--fs-project", default="rosavote-app")
     ap.add_argument("--tag", default="", help="member_id tag (default: derived from poll)")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true")

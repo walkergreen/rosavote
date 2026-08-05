@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Walker Green
 """
-Code generation + distribution-manifest builder, wired to the real roll:
-`proj-tmc-mem-dsa.main.ak_primary_id` (deduplicated primary-AKID mapping)
-joined to `ak_user_fields_pivoted` for chapter assignment.
+Code generation + distribution-manifest builder, wired to a membership
+data warehouse in BigQuery. The built-in ROLL_QUERY is a neutral example
+schema — adapt it, or point --roll-query at a SQL file for your warehouse
+(contract: return member_id, roll_chapter, emails_json, phones_json).
 
 Run ONCE per election, at the eligibility cutoff. Produces:
   1. Firestore code documents (hashed) per member, scoped to their chapter's
@@ -15,11 +16,10 @@ Run ONCE per election, at the eligibility cutoff. Produces:
   3. <out>/contact_index_private.csv — SENSITIVE contact -> member map that
      powers the enumeration-safe /resend. Never publish.
 
-Eligibility (Const. Art. V: paid up at time of election):
-    is_primary AND membership_status = 'Member in Good Standing'
-Dedup is on the primary ActionKit ID; contacts are aggregated across the
-member's whole dedup group, so any on-record email/phone can receive a
-resend, but each member gets exactly ONE code.
+Eligibility rules live in the roll query. Dedup is the query's job too:
+return one row per member, with contacts aggregated across the member's
+records, so any on-record email/phone can receive a resend but each member
+gets exactly ONE code.
 
 Chapter -> poll mapping comes from the poll configs (Firestore config__polls,
 falling back to the CHAPTERS seed): a poll matches roll rows whose chapter
@@ -30,7 +30,7 @@ Usage:
     python3 tools/generate_codes.py --demo             # offline shape demo
     python3 tools/generate_codes.py --dry-run          # BigQuery, files only
     python3 tools/generate_codes.py --write            # + Firestore code docs
-        [--project proj-tmc-mem-dsa] [--fs-project dsa-org-tools]
+        --project <bigquery-roll-project> [--fs-project rosavote-app]
         [--poll debs_endorsement__nyc ...] [--limit N] [--out-dir codes_out]
 
 PII: row-level member data only ever touches the output CSVs on local disk —
@@ -47,34 +47,30 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 CODE_BYTES = 12  # secrets.token_urlsafe(12) -> ~16 chars, URL-safe
-BASE_URL = os.environ.get("VOTE_BASE_URL", "https://vote.dsausa.org")
+BASE_URL = os.environ.get("VOTE_BASE_URL", "https://app.rosavote.org")
 
 # Arrays come back TO_JSON_STRING-encoded so the bq CLI's CSV output stays
 # one column per field; chapters are inlined as escaped string literals.
 ROLL_QUERY = """
-WITH eligible AS (
-  SELECT actionkit_id, dedup_group_id
-  FROM `{roll}.ak_primary_id`
-  WHERE is_primary AND membership_status = 'Member in Good Standing'
-),
-contacts AS (
-  SELECT dedup_group_id,
-         ARRAY_AGG(DISTINCT NULLIF(email_norm, '') IGNORE NULLS) AS all_emails,
-         ARRAY_AGG(DISTINCT NULLIF(phone_norm, '') IGNORE NULLS) AS all_phones
-  FROM `{roll}.ak_primary_id`
+-- Example roll query: adapt to your warehouse, or supply --roll-query FILE.
+-- Contract: one row per member with columns member_id, roll_chapter,
+-- emails_json, phones_json (JSON-encoded string arrays).
+WITH contacts AS (
+  SELECT member_id,
+         TO_JSON_STRING(ARRAY_AGG(DISTINCT NULLIF(email, '') IGNORE NULLS)) AS emails_json,
+         TO_JSON_STRING(ARRAY_AGG(DISTINCT NULLIF(phone, '') IGNORE NULLS)) AS phones_json
+  FROM `{roll}.member_contacts`
   GROUP BY 1
 )
 SELECT
-  e.actionkit_id           AS member_akid,
-  f.chapter                AS roll_chapter,
-  TO_JSON_STRING(c.all_emails) AS emails_json,
-  TO_JSON_STRING(c.all_phones) AS phones_json
-FROM eligible e
-JOIN `{roll}.ak_user_fields_pivoted` f ON f.user_id = e.actionkit_id
-JOIN contacts c ON c.dedup_group_id = e.dedup_group_id
-WHERE f.chapter IN ({chapters})
+  CAST(m.member_id AS STRING) AS member_id,
+  m.chapter                   AS roll_chapter,
+  c.emails_json,
+  c.phones_json
+FROM `{roll}.members` m
+JOIN contacts c USING (member_id)
+WHERE m.status = 'active' AND m.chapter IN ({chapters})
 """
-
 
 def new_code() -> str:
     return secrets.token_urlsafe(CODE_BYTES)
@@ -109,7 +105,7 @@ def _resend_hash(pid, contact):
 
 
 def generate(rows, mapping, db=None, resend_index=False):
-    """rows: iterables/dicts with member_akid, roll_chapter, all_emails,
+    """rows: iterables/dicts with member_id, roll_chapter, all_emails,
     all_phones. Returns (manifest, contact_index, skipped_chapter_counts).
 
     resend_index: when True (and db given), also provision the OPT-IN
@@ -123,15 +119,14 @@ def generate(rows, mapping, db=None, resend_index=False):
     seen = set()
     resend_docs = 0
     for r in rows:
-        akid = r["member_akid"]
-        if akid in seen:
+        member_id = str(r["member_id"])
+        if member_id in seen:
             continue                      # dedup safety net
-        seen.add(akid)
+        seen.add(member_id)
         pid = mapping.get(r["roll_chapter"])
         if pid is None:
             skipped[r["roll_chapter"]] = skipped.get(r["roll_chapter"], 0) + 1
             continue
-        member_id = f"AK{akid}"
         code = new_code()
         ch = code_hash(code)
         vote_link = f"{BASE_URL}/p/{pid}/v/{code}"
@@ -188,7 +183,7 @@ def fetch_rows(project, roll_dataset, chapters, limit, out_dir):
             stdout=f, stderr=subprocess.DEVNULL, check=True)
     with open(raw, newline="") as f:
         for row in csv.DictReader(f):
-            yield {"member_akid": int(row["member_akid"]),
+            yield {"member_id": str(row["member_id"]),
                    "roll_chapter": row["roll_chapter"],
                    "all_emails": json.loads(row["emails_json"] or "[]"),
                    "all_phones": json.loads(row["phones_json"] or "[]")}
@@ -257,15 +252,15 @@ def firestore_bulk_client(fs_project):
 def demo():
     mapping = {"New York City": "debs_endorsement__nyc", "Chicago": "debs_endorsement__chi"}
     rows = [
-        {"member_akid": 1, "roll_chapter": "New York City",
+        {"member_id": "M1", "roll_chapter": "New York City",
          "all_emails": ["a@example.com", "a.old@example.com"], "all_phones": ["+12125550111"]},
-        {"member_akid": 2, "roll_chapter": "New York City", "all_emails": [],
+        {"member_id": "M2", "roll_chapter": "New York City", "all_emails": [],
          "all_phones": ["+12125550122"]},
-        {"member_akid": 3, "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
+        {"member_id": "M3", "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
          "all_phones": []},
-        {"member_akid": 4, "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
+        {"member_id": "M4", "roll_chapter": "Chicago", "all_emails": ["family@example.com"],
          "all_phones": []},
-        {"member_akid": 5, "roll_chapter": "Boise", "all_emails": ["c@example.com"],
+        {"member_id": "M5", "roll_chapter": "Boise", "all_emails": ["c@example.com"],
          "all_phones": []},
     ]
     manifest, idx, skipped = generate(rows, mapping, db=None)
@@ -278,9 +273,12 @@ def main():
     mode.add_argument("--demo", action="store_true", help="offline demo rows")
     mode.add_argument("--dry-run", action="store_true", help="BigQuery, files only")
     mode.add_argument("--write", action="store_true", help="BigQuery + Firestore codes")
-    ap.add_argument("--project", default="proj-tmc-mem-dsa", help="BigQuery project")
-    ap.add_argument("--roll-dataset", default="main")
-    ap.add_argument("--fs-project", default="dsa-org-tools", help="Firestore project")
+    ap.add_argument("--project", default="", help="BigQuery project holding the roll "
+                    "(required for --dry-run/--write)")
+    ap.add_argument("--roll-dataset", default="rolls")
+    ap.add_argument("--roll-query", default="", metavar="FILE",
+                    help="SQL file overriding the built-in example ROLL_QUERY")
+    ap.add_argument("--fs-project", default="rosavote-app", help="Firestore project")
     ap.add_argument("--poll", action="append", default=[],
                     help="restrict to these poll_ids (repeatable)")
     ap.add_argument("--limit", type=int, default=0, help="row cap for test runs")
@@ -294,6 +292,11 @@ def main():
     if args.demo:
         demo()
         return
+    if not args.project:
+        ap.error("--project (the BigQuery roll project) is required for --dry-run/--write")
+    if args.roll_query:
+        global ROLL_QUERY
+        ROLL_QUERY = open(args.roll_query, encoding="utf-8").read()
 
     # poll configs: Firestore config__polls when seeded, else the CHAPTERS seed
     import vote_service

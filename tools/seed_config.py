@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Walker Green
 """
-Seed / manage self-service config in Firestore (project dsa-org-tools).
+Seed / manage self-service config in Firestore (project rosavote-app).
 
     python3 tools/seed_config.py polls            # push CHAPTERS seed -> config__polls
     python3 tools/seed_config.py polls --force    # overwrite existing docs

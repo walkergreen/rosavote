@@ -5,7 +5,7 @@ three places, by kind.
 
 | Secret | Where it lives | How it's protected |
 |---|---|---|
-| Database access (Firestore, BigQuery, GCS) | **nowhere** — IAM identity | Cloud Run runs as the least-priv service account `rosavote-run@dsa-org-tools.iam.gserviceaccount.com`; the clients auth as that identity. No key exists to leak. |
+| Database access (Firestore, BigQuery, GCS) | **nowhere** — IAM identity | Cloud Run runs as the least-priv service account `rosavote-run@rosavote-app.iam.gserviceaccount.com`; the clients auth as that identity. No key exists to leak. |
 | National admin token (`ADMIN_TOKEN`) | **Secret Manager** (`ballot-admin-token`) | mounted via `--set-secrets`; versioned + access-audited |
 | Chapter/national admin tokens | **Firestore `config__admins`**, keyed by SHA-256(token) | only the hash is stored — plaintext never persisted |
 | Voting codes | **Firestore `{poll}__codes`**, SHA-256 hashed | plaintext never persisted |
@@ -23,7 +23,7 @@ is the only right one.
 ## One-time: create the secrets
 
 ```sh
-PROJECT=dsa-org-tools
+PROJECT=rosavote-app
 # Mailgun (transactional email)
 printf '%s' "$MAILGUN_API_KEY" | gcloud secrets create mailgun-api-key --data-file=- --project $PROJECT
 # Twilio (transactional one-off SMS)
@@ -37,7 +37,7 @@ Grant the runtime SA read access to each (once):
 ```sh
 for S in mailgun-api-key twilio-auth-token stw-api-key; do
   gcloud secrets add-iam-policy-binding "$S" --project $PROJECT \
-    --member="serviceAccount:rosavote-run@dsa-org-tools.iam.gserviceaccount.com" \
+    --member="serviceAccount:rosavote-run@rosavote-app.iam.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
 done
 ```
@@ -50,12 +50,12 @@ API base) → `--set-env-vars`. They're not secret and can live in plain config.
 ```sh
 gcloud run deploy member-ballot-v3 --source ballot-v2 --region us-east1 \
   --allow-unauthenticated --min-instances 0 --max-instances 20 \
-  --service-account rosavote-run@dsa-org-tools.iam.gserviceaccount.com \
+  --service-account rosavote-run@rosavote-app.iam.gserviceaccount.com \
   --set-secrets ADMIN_TOKEN=ballot-admin-token:latest,\
 MAILGUN_API_KEY=mailgun-api-key:latest,\
 TWILIO_AUTH_TOKEN=twilio-auth-token:latest,\
 STW_API_KEY=stw-api-key:latest \
-  --set-env-vars MAILGUN_DOMAIN=mg.dsausa.org,MAILGUN_FROM='DSA Elections <ballots@mg.dsausa.org>',\
+  --set-env-vars MAILGUN_DOMAIN=mg.rosavote.org,MAILGUN_FROM='RosaVote <ballots@mg.rosavote.org>',\
 TWILIO_ACCOUNT_SID=ACxxxxxxxx,TWILIO_FROM=+15551234567,\
 SOURCE_URL=https://github.com/…,CANONICAL_HOST=vote.rosavote.org
 ```

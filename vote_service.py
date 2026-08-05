@@ -3730,23 +3730,22 @@ def admin_import_voters_gcs(poll_id):
                     "manifest_gcs": manifest_uri}), 200
 
 
-ROLL_IMPORT_QUERY = """
-WITH eligible AS (
-  SELECT actionkit_id, dedup_group_id
-  FROM `{roll}.ak_primary_id`
-  WHERE is_primary AND membership_status = 'Member in Good Standing'
-)
-SELECT e.actionkit_id AS member_akid
-FROM eligible e
-JOIN `{roll}.ak_user_fields_pivoted` f ON f.user_id = e.actionkit_id
-WHERE f.chapter = @chapter
-"""
+# The roll query is warehouse-specific. Supply your own via the
+# ROLL_IMPORT_QUERY env var; contract: SELECT one STRING column `member_id`,
+# may use the @chapter parameter, and `{roll}` expands to "<project>.<dataset>".
+# The built-in default is a neutral example schema.
+ROLL_IMPORT_QUERY = os.environ.get("ROLL_IMPORT_QUERY", """
+SELECT CAST(member_id AS STRING) AS member_id
+FROM `{roll}.members`
+WHERE status = 'active' AND chapter = @chapter
+""")
 
 
 @app.post("/admin/api/polls/<poll_id>/voters/import_bigquery")
 def admin_import_voters_bigquery(poll_id):
-    """Import straight from the membership warehouse (national admins only):
-    eligible primaries (Member in Good Standing) whose roll chapter matches.
+    """Import from a membership data warehouse (national admins only). The
+    eligibility query is operator-configured (ROLL_IMPORT_QUERY env); rows
+    whose roll chapter matches are minted codes.
     Manifest: inline for small rolls, or written to manifest_gcs
     (gs://bucket/file.csv) — required above the inline cap."""
     ident = require_admin(national_only=True)
@@ -3759,18 +3758,23 @@ def admin_import_voters_bigquery(poll_id):
     chapter = str(data.get("chapter") or cfg.get("roll_chapter") or cfg.get("name") or "").strip()
     if not chapter:
         return jsonify({"error": "bad_request", "message": "chapter required"}), 400
-    project = str(data.get("roll_project") or "proj-tmc-mem-dsa")
-    dataset = str(data.get("roll_dataset") or "main")
-    job_project = str(data.get("job_project") or "dsa-org-tools")
+    project = str(data.get("roll_project") or os.environ.get("ROLL_PROJECT", "")).strip()
+    dataset = str(data.get("roll_dataset") or os.environ.get("ROLL_DATASET", "")).strip()
+    if not project or not dataset:
+        return jsonify({"error": "bad_request",
+                        "message": "roll_project and roll_dataset required "
+                                   "(or ROLL_PROJECT/ROLL_DATASET env)"}), 400
+    job_project = str(data.get("job_project") or "").strip() or None
     try:
         from google.cloud import bigquery
-        # jobs bill/run in our project; the roll is read cross-project
+        # jobs bill/run in this service's project unless job_project overrides;
+        # the roll is read cross-project
         client = bigquery.Client(project=job_project)
         job = client.query(
             ROLL_IMPORT_QUERY.format(roll=f"{project}.{dataset}"),
             job_config=bigquery.QueryJobConfig(query_parameters=[
                 bigquery.ScalarQueryParameter("chapter", "STRING", chapter)]))
-        members = [{"member_id": f"AK{row['member_akid']}", "chapter": chapter}
+        members = [{"member_id": str(row["member_id"]), "chapter": chapter}
                    for row in job.result()]
     except Exception as e:
         return jsonify({"error": "bigquery_failed", "message": type(e).__name__,

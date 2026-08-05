@@ -20,7 +20,7 @@
 # ONE edge, not two fighting each other. Cloud Armor is the "all-Google" path.
 set -euo pipefail
 
-PROJECT="${PROJECT:-dsa-org-tools}"
+PROJECT="${PROJECT:-rosavote-app}"
 POLICY="${POLICY:-rosavote-armor}"
 BACKEND="${BACKEND:-}"          # set to your LB backend service to auto-attach
 

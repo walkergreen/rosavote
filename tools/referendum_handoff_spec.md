@@ -18,9 +18,9 @@ Chosen over OpaVote (cost at ~$9,600) and Helios (poor mobile/code fit).
 ## Stack
 
 - **Cloud Run** (Python/Flask + gunicorn) — the vote service.
-- **Firestore (Native mode)** — codes and ballots. Project `dsa-org-tools`,
+- **Firestore (Native mode)** — codes and ballots. Project `rosavote-app`,
   region `us-east1`.
-- **BigQuery** — the membership roll (`proj-tmc-mem-dsa.main.clean_member_table`),
+- **BigQuery** — the membership roll (a deduplicated member table in the operator's warehouse),
   a deduped primary-AKID table, and tabulation.
 - **Solidarity Tech / Scale to Win** — SMS/email distribution (not built here;
   the app never sends messages itself).
@@ -215,8 +215,6 @@ check the provisional form's tab order.
 6. Production hardening: re-enable auth (staging is `--allow-unauthenticated`),
    Cloud Armor, min/max-instances, billing alerts.
 7. Real screen-reader accessibility pass, captured for the election record.
-8. Resolve the `wgreen@dsausa.org` "Gaia id not found" org-access issue with a
-   GCP org admin (blocks authenticated identity; harmless only while public).
 
 ## Known environment gotchas
 
@@ -227,4 +225,4 @@ check the provisional form's tab order.
 - Deploying to an existing service name UPDATES it (new revision); "already
   exists" conflicts clear on a straight re-run.
 - Seeding/verifying from Cloud Shell needs `pip3 install google-cloud-firestore`
-  and `firestore.Client(project="dsa-org-tools")`.
+  and `firestore.Client(project="rosavote-app")`.

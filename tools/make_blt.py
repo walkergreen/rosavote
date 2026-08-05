@@ -21,7 +21,7 @@ adopted rule that abstention affects quorum, never the quota or result.
 
 Usage:
     python make_blt.py --from-csv ballots.csv --out-prefix chapter_nyc
-    python make_blt.py --from-firestore --project dsa-org-tools \
+    python make_blt.py --from-firestore --project rosavote-app \
         --poll-id debs_endorsement__nyc --out-prefix chapter_nyc
 """
 
@@ -322,7 +322,7 @@ def main():
     src.add_argument("--from-csv")
     src.add_argument("--from-firestore", action="store_true")
     ap.add_argument("--delegates-csv", help="delegate-ballots CSV (q7 column) when using --from-csv")
-    ap.add_argument("--project", default="dsa-org-tools")
+    ap.add_argument("--project", default="rosavote-app")
     ap.add_argument("--poll-id", default="debs_endorsement__atlarge")
     ap.add_argument("--out-prefix", default="ballot")
     args = ap.parse_args()

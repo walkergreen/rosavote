@@ -78,7 +78,7 @@ fake_exc = types.ModuleType("google.api_core.exceptions")
 fake_exc.Aborted = type("Aborted", (Exception,), {})
 
 # BigQuery stub: returns a tiny fixed roll for any query
-BQ_ROWS = [{"member_akid": 777001}, {"member_akid": 777002}]
+BQ_ROWS = [{"member_id": "AK777001"}, {"member_id": "AK777002"}]
 fake_bq = types.ModuleType("google.cloud.bigquery")
 fake_bq.Client = lambda *a, **k: types.SimpleNamespace(
     query=lambda q, job_config=None: types.SimpleNamespace(result=lambda: list(BQ_ROWS)))
@@ -311,13 +311,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 import generate_codes  # noqa: E402
 
 gm, gci, gsk = generate_codes.generate(
-    [{"member_akid": 1, "roll_chapter": "New York City",
+    [{"member_id": "AK1", "roll_chapter": "New York City",
       "all_emails": ["x@example.org"], "all_phones": ["+12125550100"]},
-     {"member_akid": 1, "roll_chapter": "New York City",
+     {"member_id": "AK1", "roll_chapter": "New York City",
       "all_emails": ["x@example.org"], "all_phones": []},
-     {"member_akid": 2, "roll_chapter": "Nowhere",
+     {"member_id": "AK2", "roll_chapter": "Nowhere",
       "all_emails": ["y@example.org"], "all_phones": []},
-     {"member_akid": 3, "roll_chapter": "New York City",
+     {"member_id": "AK3", "roll_chapter": "New York City",
       "all_emails": [], "all_phones": ["+12125550101"]}],
     {"New York City": "p1"})
 ok(len(gm) == 2 and gm[0]["channel"] == "email" and gm[1]["channel"] == "sms",
@@ -630,12 +630,14 @@ ok(c.post("/admin/api/polls/special_ref/voters/import_gcs", headers=hdr,
    "GCS import rejects CSV without member_id header")
 
 r = c.post("/admin/api/polls/special_ref/voters/import_bigquery", headers=hdr,
-           json={"chapter": "New York City"})
+           json={"chapter": "New York City",
+                 "roll_project": "example-warehouse", "roll_dataset": "rolls"})
 ok(r.status_code == 200 and len(r.get_json()["created"]) == 2
    and r.get_json()["created"][0]["member_id"] == "AK777001",
    "BigQuery import mints codes for eligible roll members")
 ok(c.post("/admin/api/polls/special_ref/voters/import_bigquery", headers=chi_hdr,
-          json={"chapter": "Chicago"}).status_code == 403, "BigQuery import national-only")
+          json={"chapter": "Chicago", "roll_project": "example-warehouse",
+                "roll_dataset": "rolls"}).status_code == 403, "BigQuery import national-only")
 
 # ---- results: locked until finalized, then full tallies ----
 ok(c.get("/admin/api/polls/special_ref/results", headers=hdr).status_code == 409,

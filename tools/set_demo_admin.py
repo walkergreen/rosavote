@@ -30,7 +30,7 @@ def main():
     ap.add_argument("--role", choices=["national", "chapter"], required=True)
     ap.add_argument("--polls", nargs="*", default=["demo_sandbox"],
                     help="chapter-scope poll_ids (ignored for national)")
-    ap.add_argument("--fs-project", default="dsa-org-tools")
+    ap.add_argument("--fs-project", default="rosavote-app")
     ap.add_argument("--token", default=DEMO_TOKEN, help="plaintext demo token")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true")
