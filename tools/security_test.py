@@ -562,6 +562,23 @@ ok("frame-ancestors 'none'" in (h.get("Content-Security-Policy") or ""),
 
 
 # =========================================================================
+# G. TOOLING GUARDRAILS
+# =========================================================================
+section("G. the public national demo token can't be minted onto real data")
+import subprocess as _sp  # noqa: E402
+_tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "set_demo_admin.py")
+# refuses to WRITE a national demo token without the synthetic-data attestation,
+# and does so before touching Firestore (so this is safe to run offline)
+_g = _sp.run([sys.executable, _tool, "--role", "national", "--write"],
+             capture_output=True, text=True)
+ok(_g.returncode == 2 and "confirm-synthetic-data" in _g.stderr,
+   "set_demo_admin refuses a national write without --confirm-synthetic-data")
+_h = _sp.run([sys.executable, _tool, "--help"], capture_output=True, text=True)
+ok("--confirm-synthetic-data" in _h.stdout and "--force" in _h.stdout,
+   "the guardrail flags are documented in --help")
+
+
+# =========================================================================
 print()
 if failures:
     print(f"SECURITY SUITE: {passed} passed, {len(failures)} FAILED")
