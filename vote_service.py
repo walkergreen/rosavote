@@ -4189,6 +4189,12 @@ def admin_import_voters_gcs(poll_id):
 # ROLL_IMPORT_QUERY env var; contract: SELECT one STRING column `member_id`,
 # may use the @chapter parameter, and `{roll}` expands to "<project>.<dataset>".
 # The built-in default is a neutral example schema.
+# GCP project ids and BigQuery dataset ids: letters, digits, - and _, plus the
+# single ':' legacy domain-scoped project ids use. Deliberately excludes the
+# backtick, quote, whitespace, parenthesis and semicolon characters that would
+# let a caller-supplied value escape the interpolated table reference below.
+GCP_IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}(:[A-Za-z0-9][A-Za-z0-9_-]{0,62})?$")
+
 ROLL_IMPORT_QUERY = os.environ.get("ROLL_IMPORT_QUERY", """
 SELECT CAST(member_id AS STRING) AS member_id
 FROM `{roll}.members`
@@ -4220,6 +4226,21 @@ def admin_import_voters_bigquery(poll_id):
                         "message": "roll_project and roll_dataset required "
                                    "(or ROLL_PROJECT/ROLL_DATASET env)"}), 400
     job_project = str(data.get("job_project") or "").strip() or None
+    # The `chapter` filter is a bound query parameter, but the TABLE REFERENCE
+    # is string-interpolated into the SQL — so an unvalidated project/dataset
+    # breaks out of the backticks and injects arbitrary SQL, executed with this
+    # service's BigQuery credentials (e.g. `x`.t` UNION ALL SELECT email FROM
+    # `hr.people` --` returns whatever the caller asks for as "member_id").
+    # Constrain both to the identifier charsets GCP actually allows, so nothing
+    # that could terminate the quoting ever reaches the query string.
+    for _label, _val in (("roll_project", project), ("roll_dataset", dataset),
+                         ("job_project", job_project)):
+        if _val and not GCP_IDENT_RE.match(_val):
+            return jsonify({"error": "bad_request",
+                            "message": f"{_label} must match "
+                                       f"{GCP_IDENT_RE.pattern} (letters, digits, "
+                                       "-, _, and at most one : for legacy "
+                                       "domain-scoped project ids)"}), 400
     try:
         from google.cloud import bigquery
         # jobs bill/run in this service's project unless job_project overrides;

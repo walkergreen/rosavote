@@ -470,6 +470,26 @@ rotating = sum(vote_service._prov_throttled(ip_for(f"spoof{i}, 198.51.100.7"))
 vote_service._prov_hits.clear()
 ok(rotating > 0, "rotating X-Forwarded-For cannot bypass the per-IP throttle")
 
+section("F2. warehouse identifiers cannot escape the interpolated query")
+# `chapter` is a bound parameter, but the TABLE REFERENCE is interpolated, so
+# roll_project/roll_dataset must never carry anything that terminates the
+# backtick quoting. A backtick in an accepted value is the whole ballgame.
+_R = vote_service.GCP_IDENT_RE
+for good in ("rosavote-app", "proj-tmc-mem-dsa", "main", "my_dataset_1",
+             "a--b", "example:legacy"):
+    ok(_R.match(good), f"legitimate GCP identifier accepted: {good!r}")
+for bad in ("main`.members` UNION ALL SELECT email FROM `hr.x` --", "x`",
+            "a b", "a;DROP", "a'b", "a)b", "`", "a`.b`", "a/*x*/b", "a\nb"):
+    ok(not _R.match(bad), f"injection attempt rejected: {bad[:34]!r}")
+ok(not any(_R.match(v) for v in ("`", "a`", "`a", "a`b")),
+   "no accepted identifier can contain a backtick")
+for field in ("roll_project", "roll_dataset"):
+    rr = c.post("/admin/api/polls/secpoll/voters/import_bigquery", headers=NATIONAL,
+                json={"chapter": "X", "roll_project": "p", "roll_dataset": "d",
+                      field: "evil`.t` UNION ALL SELECT 1 --"})
+    ok(rr.status_code == 400,
+       f"import_bigquery rejects an injected {field} before querying")
+
 ok(app.config.get("MAX_CONTENT_LENGTH"), "a request body cap is configured")
 # needs an OPEN poll: a closed/finalized one answers 403 before the body is
 # ever read, which would pass this check for the wrong reason.
