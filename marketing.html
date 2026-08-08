@@ -303,6 +303,7 @@
       <a href="#dsa">Built for DSA</a>
       <a href="#compare">Compare</a>
       <a href="#cost">Cost</a>
+      <a href="#status">Status</a>
       <a href="#openslides">OpenSlides</a>
       <a href="#source">Source</a>
     </nav>
@@ -324,7 +325,7 @@
           <b>your own cloud</b> — with tamper-evident results any member can check, and the counting
           rules DSA actually uses built right in.</p>
         <div class="cta-row">
-          <a class="btn btn--go" href="https://app.rosavote.org/" target="_blank" rel="noopener">Open the live app <span aria-hidden="true">→</span></a>
+          <a class="btn btn--go" href="https://app.rosavote.org/" target="_blank" rel="noopener">Try the live demo <span aria-hidden="true">→</span></a>
           <a class="btn" href="https://github.com/walkergreen/rosavote" target="_blank" rel="noopener">Read the source · AGPL-3.0</a>
         </div>
       </div>
@@ -436,14 +437,14 @@
 <section id="how" aria-labelledby="how-h">
   <div class="wrap">
     <div class="sec-head reveal">
-      <span class="eyebrow">Cast → count → prove</span>
+      <span class="eyebrow">How an election runs here</span>
       <h2 id="how-h">Six steps from membership roll to a result anyone can check.</h2>
     </div>
     <div class="steps reveal">
       <div class="step"><div class="n">01</div><h3>Import the roll</h3>
-        <p>Upload your membership list once. RosaVote de-duplicates and issues a single-use code per member.</p></div>
+        <p>The membership list is loaded once. RosaVote de-duplicates it and issues a single-use code per member.</p></div>
       <div class="step"><div class="n">02</div><h3>Send the codes</h3>
-        <p>Codes go out by email or SMS through your provider of choice, with opt-out handled automatically.</p></div>
+        <p>Codes go out by email or SMS through the configured provider, with opt-out handled automatically.</p></div>
       <div class="step"><div class="n">03</div><h3>Members rank or score</h3>
         <p>Voters open a clean, accessible ballot — rank a slate, score candidates, or answer a motion.</p></div>
       <div class="step"><div class="n">04</div><h3>Close &amp; count</h3>
@@ -682,16 +683,56 @@
   </div>
 </section>
 
+<!-- ================= STATUS ================= -->
+<section id="status" aria-labelledby="st-h">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Where this is today</span>
+      <h2 id="st-h">What RosaVote is — and isn't — right now.</h2>
+      <p>Election software should be the last thing to oversell itself. Here is the
+        honest state of the project.</p>
+    </div>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr)">
+      <article class="card reveal">
+        <span class="k">What's working</span>
+        <h3>The software is built and tested</h3>
+        <p>The full election lifecycle — ballots, codes, Scottish &amp; Meek STV,
+          Score/STAR/STAR-PR, quotas, alternates, adjudication, publication and
+          verification — is implemented, with 284 automated checks and a 40-election
+          regression suite over real historical contests.</p>
+      </article>
+      <article class="card reveal">
+        <span class="k">Validated</span>
+        <h3>It reproduces a certified count</h3>
+        <p>Run against the published ballots from DSA's 2025 NPC At-Large election,
+          the tabulator returns the certified winner set, candidate for candidate.
+          That's a real-election check — not a synthetic one.</p>
+      </article>
+      <article class="card reveal">
+        <span class="k">Not yet</span>
+        <h3>It hasn't decided anything</h3>
+        <p><b>No binding election has been run on RosaVote.</b> Every election on this
+          instance is a demo or a replay of an already-certified count. There is also
+          no self-service signup, and no independent security audit has been done.</p>
+      </article>
+    </div>
+    <p class="cmp-note reveal">Want to run a real election on it? That's done
+      hands-on right now — write to <a href="mailto:support@rosavote.org">support@rosavote.org</a>
+      and it gets set up with you. The full plan, including everything still missing, is in the
+      <a href="https://github.com/walkergreen/rosavote/blob/main/ROADMAP.md" target="_blank" rel="noopener">public roadmap ↗</a></p>
+  </div>
+</section>
+
 <!-- ================= FINAL CTA ================= -->
 <section id="final" class="final" aria-labelledby="fin-h">
   <div class="wrap">
     <div class="reveal">
       <span class="eyebrow">Put it to work</span>
-      <h2 id="fin-h" style="margin-top:14px">A ballot box your members can open.</h2>
-      <p class="lede">Run your next endorsement, officer race, or convention delegate election on a system
-        that's open from the roll to the recount.</p>
+      <h2 id="fin-h" style="margin-top:14px">Kick the tires.</h2>
+      <p class="lede">Try the demo, read every line of the count, or talk to us about
+        piloting a real election — open from the roll to the recount.</p>
       <div class="cta-row">
-        <a class="btn btn--go" href="https://app.rosavote.org/" target="_blank" rel="noopener">Open the live app</a>
+        <a class="btn btn--go" href="https://app.rosavote.org/" target="_blank" rel="noopener">Try the live demo</a>
         <a class="btn" href="#verify">See how verification works</a>
       </div>
     </div>
