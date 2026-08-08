@@ -1,161 +1,162 @@
-# RosaVote — roadmap to chapter elections
+# RosaVote roadmap
 
-**Goal:** be able to run a real, binding chapter election on RosaVote within
-four weeks — for one pilot chapter, operated concierge-style.
+**Goal: run one real, binding chapter election on RosaVote within four weeks.**
+One pilot chapter, set up by hand.
 
-This file is the honest status of the project. It is deliberately specific
-about what is *not* built, because the most common question about RosaVote is
-"what is this, exactly?"
+This file is the honest status of the project. It's specific about what isn't
+built, because the most common question about RosaVote is what it actually is.
 
 ---
 
 ## Where this is today
 
-**The software is feature-complete for the election lifecycle.** Ballots
-(ranked / score / STAR / yes-no / multi-select), Scottish and Meek STV,
-Score/STAR/STAR-PR, diversity-quota constraints, delegate alternates,
-code-authenticated voting, scoped admin, provisional adjudication,
-void-and-reissue, hash-chain publication, and an in-browser verifier all
-exist and are exercised by tests.
+The software is feature-complete for the election lifecycle. Ballots (ranked,
+score, STAR, yes/no, multi-select), Scottish and Meek STV, Score/STAR/STAR-PR,
+diversity-quota constraints, delegate alternates, code-authenticated voting,
+scoped admin, provisional adjudication, void-and-reissue, hash-chain
+publication, and an in-browser verifier all exist and are covered by tests.
 
-**It is validated against a real election.** The tabulator reproduces the
-certified result of DSA's 2025 NPC At-Large count from the published ballots,
-candidate for candidate. There are 284 automated checks and a 40-election BLT
-regression suite covering real historical DSA/YDSA contests.
+It's validated against published election records. DSA publishes the ballot
+file for its NPC elections so members and observers can recount them. Run
+against the published 2025 NPC At-Large ballots, this tabulator returns the
+certified winner set, candidate for candidate. Those files are public record
+and contain rankings only, never voter identities. Same for the 40-election
+regression suite: every fixture is a published contest result, anonymized by
+the BLT format itself.
 
-**It has never run a binding election.** Every election on the live instance
-to date is a demo or a replay of an already-certified count. Nothing here has
-decided anything.
+It has never run a binding election. Everything on the live instance is a demo
+or a replay of a count that was already certified. Nothing here has decided
+anything.
 
-**There is no self-service.** You cannot sign up and run an election. Getting
-an election onto RosaVote today means emailing support@rosavote.org and having
-it provisioned by hand.
+There's no self-service. You can't sign up and run an election. Getting one
+onto RosaVote today means emailing support@rosavote.org and having it set up
+by hand.
 
-**It cannot currently send voting codes.** No email or SMS provider is
-configured on the production instance. This is the single largest gap between
-"the software works" and "a chapter can vote on it."
+It can't currently send voting codes. No email or SMS provider is configured
+on production. That's the real gap between "the software works" and "a chapter
+can vote on it."
 
 ---
 
 ## Scope for the next four weeks
 
-**In scope:** one pilot chapter election, run concierge — the chapter supplies
-a membership CSV, RosaVote is configured by hand, codes are delivered by
-email, results are published with a verifiable chain.
+In scope: one pilot chapter election, run concierge. The chapter supplies a
+membership CSV, the election is configured by hand, codes go out by email,
+results publish with a verifiable chain.
 
-**Explicitly out of scope** (deferred, not forgotten):
+Out of scope, deliberately:
 
-| Deferred | Why | Interim |
+| Deferred | Why | What happens instead |
 |---|---|---|
-| Self-service signup | Real product surface; not needed to prove the system | Concierge onboarding via support@ |
-| Warehouse (BigQuery) roll import | Service account has no BigQuery role by design | CSV / GCS import |
-| Independent penetration test | Cannot be procured and remediated in 4 weeks | Disclose that none has been done |
-| WCAG conformance *claim* | Requires a human screen-reader pass | Do the pass; describe, don't certify |
-| Multi-organization tenancy | One pilot doesn't need it | Single operator, per-poll scoping |
+| Self-service signup | Real product surface, not needed to prove the system | Set up by hand via support@ |
+| Warehouse roll import | The service account has no BigQuery role by design | CSV / GCS import |
+| Independent penetration test | Can't procure and remediate one in four weeks | Say plainly that none has been done |
+| WCAG conformance *claim* | Needs a human screen-reader pass | Do the pass, describe it, don't certify |
+| Multi-org tenancy | One pilot doesn't need it | Single operator, per-poll scoping |
 
 ---
 
-## P0 — blockers before any real ballot exists
+## P0: blockers before any real ballot exists
 
-Nothing below is optional. Each is a correctness, security, or
-"votes-cannot-happen" issue.
+None of these are optional.
 
 - [ ] **Revoke the public demo national-root token.** `DEMO-ADMIN-TOKEN-2026`
-      is printed publicly on the console sign-in page and currently resolves to
-      `role: national, polls: (all)` — full admin over every poll on the
-      instance, including the real 2025 NPC ballot archive. Anyone on the
-      internet can open the console and delete or edit elections.
-      Fix: `tools/set_demo_admin.py --role chapter --polls demo_sandbox --write`.
+      is printed on the console sign-in page and currently resolves to
+      `role: national, polls: (all)`. That's full admin over every poll on the
+      instance, including the NPC replay archive. Anyone on the internet can
+      open the console and delete or edit an election.
+      Fix: `tools/set_demo_admin.py --role chapter --polls demo_sandbox --write`
 - [ ] **Isolate demo data from real elections.** Once the demo token is
-      chapter-scoped, confirm the demo sandbox is the *only* poll it can reach,
-      and decide whether the NPC replay archive stays on the public instance at
-      all.
-- [ ] **Stand up email delivery.** Mailgun (or SES) sending domain
-      `mg.rosavote.org`, SPF + DKIM records in Cloudflare, credential in Secret
-      Manager, `MAILGUN_*` wired via `--set-secrets`. Until this exists, zero
-      voting codes can be sent.
-- [ ] **Warm the sending domain.** A cold domain blasting a few thousand
-      first-contact emails is the most likely way a real election fails in
-      practice. Send graduated volume for at least two weeks before the pilot;
-      monitor bounce/complaint rates.
-- [ ] **Settle data governance in writing.** The instance runs in a personal
-      GCP project. A chapter's membership roster (names, emails, phones) would
-      live there under one individual's control. Before accepting real member
-      data: define who is controller vs processor, retention and deletion
-      terms, breach notification, and what the chapter is agreeing to. This is
-      a governance question, not a technical one, and it gates the pilot.
+      chapter-scoped, confirm the sandbox is the only poll it reaches. Decide
+      whether the NPC replay stays on the public instance at all.
+- [ ] **Stand up email delivery.** Mailgun or SES sending domain
+      `mg.rosavote.org`, SPF and DKIM in Cloudflare, credential in Secret
+      Manager, wired through `--set-secrets`. Until this exists, zero codes go
+      out.
+- [ ] **Warm the sending domain.** A cold domain sending a few thousand
+      first-contact emails is the likeliest way a real election fails. Send
+      graduated volume for at least two weeks before the pilot and watch
+      bounce and complaint rates.
+- [ ] **Settle data governance in writing.** Production runs in a personal GCP
+      project. A chapter's roster (names, emails, phones) would live there
+      under one person's control. Before real member data lands: who is
+      controller, who is processor, retention and deletion, breach
+      notification, and what the chapter is agreeing to. This gates the pilot
+      and it isn't a technical problem.
 
-## P1 — required for a credible pilot
+## P1: required for a credible pilot
 
-- [ ] **Chapter intake path.** A simple request form (name, chapter, election
-      type, dates, roster size) → a written provisioning runbook so setup is
-      repeatable rather than improvised.
-- [ ] **End-to-end CSV roll import rehearsal.** The BigQuery path is
-      intentionally dead; prove the CSV/GCS path from a chapter-supplied export
-      through code minting to the distribution manifest.
-- [ ] **Restore scheduled close-out.** Cloud Scheduler API is not even enabled
-      on the project; the auto-finalize job did not survive the migration.
-      Without it, close-out is manual.
-- [ ] **Budget alerts.** Re-create the spend alerting that existed pre-migration.
-- [ ] **Rate limiting at the edge.** `/admin` and vote endpoints need L7 limits.
-      Note the constraint: `app.rosavote.org` is DNS-only (grey-cloud) because
-      Cloud Run issues its own certificate, so Cloudflare's WAF is not in front
-      of it today. Either move to a load balancer + Cloud Armor, or restructure
-      the edge.
-- [ ] **Full dress rehearsal.** A fake chapter, real email delivery to real
-      inboxes, real voting window, real close, real publish, real verification
-      — start to finish, before a member ever votes for real.
-- [ ] **Load test at chapter scale.** `tools/load_test.py` exists; run it
+- [ ] **Intake path.** A request form (chapter, election type, dates, roster
+      size) and a written provisioning runbook, so setup is repeatable instead
+      of improvised.
+- [ ] **CSV roll import rehearsal.** The BigQuery path is dead by design.
+      Prove the CSV/GCS path start to finish, from a chapter's export through
+      code minting to the distribution manifest.
+- [ ] **Restore scheduled close-out.** The Cloud Scheduler API isn't even
+      enabled on the project. The auto-finalize job didn't survive the
+      migration, so close-out is manual right now.
+- [ ] **Budget alerts.** Re-create the spend alerting that existed before the
+      migration.
+- [ ] **Rate limiting at the edge.** `/admin` and the vote endpoints need L7
+      limits. Constraint worth knowing: `app.rosavote.org` is DNS-only
+      (grey-cloud) because Cloud Run issues its own certificate, so
+      Cloudflare's WAF is not in front of it today. Either move to a load
+      balancer with Cloud Armor, or restructure the edge.
+- [ ] **Full dress rehearsal.** Fake chapter, real email delivery to real
+      inboxes, real voting window, real close, real publish, real
+      verification. Before a member ever votes for real.
+- [ ] **Load test at chapter scale.** `tools/load_test.py` exists. Run it
       against production sizing.
-- [ ] **SMS fallback** (Twilio credential) for members with no email on file.
+- [ ] **SMS fallback** (Twilio) for members with no email on file.
 
-## P2 — after the pilot
+## P2: after the pilot
 
 - [ ] Self-service signup and multi-tenant onboarding
-- [ ] Independent security review / penetration test
-- [ ] Human screen-reader pass (VoiceOver / NVDA / TalkBack)
+- [ ] Independent security review
+- [ ] Human screen-reader pass (VoiceOver, NVDA, TalkBack)
 - [ ] Staging environment on the new project
-- [ ] Published operator runbook so someone other than the author can run an
-      election
+- [ ] Operator runbook, so someone other than the author can run an election
 
 ---
 
 ## Four-week plan
 
-**Week 1 — make it safe, make it send.**
-Revoke demo root; isolate demo data; stand up the Mailgun domain with SPF/DKIM
-and begin warming; open the data-governance question with the pilot chapter.
+**Week 1. Make it safe, make it send.** Revoke demo root. Isolate demo data.
+Stand up the Mailgun domain with SPF and DKIM and start warming it. Open the
+data-governance conversation with the pilot chapter.
 
-**Week 2 — make it operable.**
-Intake form and provisioning runbook; CSV roll import rehearsed end to end;
-scheduler and budget alerts restored; SMS fallback configured.
+**Week 2. Make it operable.** Intake form and provisioning runbook. CSV roll
+import rehearsed end to end. Scheduler and budget alerts restored. SMS
+fallback configured.
 
-**Week 3 — make it survive contact.**
-Edge rate limiting; load test; full dress rehearsal including real delivery;
-fix whatever the rehearsal breaks.
+**Week 3. Make it survive contact.** Edge rate limiting. Load test. Full dress
+rehearsal with real delivery. Fix whatever the rehearsal breaks.
 
-**Week 4 — pilot, with slack.**
-Run one real chapter election. Reserve the back half of the week as buffer —
-if the rehearsal in Week 3 surfaces anything structural, the pilot slips
-rather than ships broken.
+**Week 4. Pilot, with slack.** Run one real chapter election. Hold the back
+half of the week as buffer. If Week 3 turns up something structural, the pilot
+slips instead of shipping broken.
 
 ---
 
 ## Risks worth stating plainly
 
-1. **Deliverability, not code, is the likeliest failure.** A brand-new sending
-   domain plus a one-time bulk send to members who have never received mail
-   from it is a spam-filter magnet. Domain warming is the mitigation and it
-   takes calendar time that cannot be compressed.
-2. **Single operator.** One person holds the admin credentials, the cloud
-   account, and the knowledge. If that person is unavailable mid-election
-   there is no continuity plan. A second trained operator is worth more than
-   any feature on this list.
-3. **Personal infrastructure holding member data.** See P0. Technically fine;
-   organizationally it needs an explicit agreement before real rosters land.
-4. **No independent security review.** The code is open and tested, and it has
-   never been adversarially reviewed by anyone outside the project. Say so
-   rather than implying otherwise.
-5. **First binding election is inherently the riskiest one.** Prefer a
-   low-stakes contest for the pilot — a bylaws vote or a small officer race,
-   not a contested convention delegation.
+**Deliverability, not code, is the likeliest failure.** A brand new sending
+domain plus a one-time bulk send to members who've never gotten mail from it
+is a spam-filter magnet. Warming is the fix and it costs calendar time you
+can't compress.
+
+**Single operator.** One person holds the admin credentials, the cloud
+account, and the knowledge. If that person is unavailable mid-election there's
+no continuity plan. A second trained operator is worth more than any feature
+on this list.
+
+**Personal infrastructure holding member data.** See P0. Technically fine,
+organizationally it needs an agreement before real rosters land.
+
+**No independent security review.** The code is open and tested. Nobody
+outside the project has tried to break it. Say that instead of implying
+otherwise.
+
+**The first binding election is the riskiest one.** Pick a low-stakes contest
+for the pilot. A bylaws vote or a small officer race, not a contested
+convention delegation.
