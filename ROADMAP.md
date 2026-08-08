@@ -1,8 +1,10 @@
 # RosaVote roadmap
 
-Two tracks to the same place. The fast track runs one pilot chapter election
-in about five weeks. The methodical track takes twelve and ends with a system
-someone other than the author can operate.
+Twelve weeks to a pilot chapter election, run by someone other than the
+author, on a system somebody outside the project has reviewed.
+
+Most of that is waiting, not building. The engineering left is about two
+weekends of work. See the next section before reading the schedule as effort.
 
 This file is the honest status of the project. It's specific about what isn't
 built, because the most common question about RosaVote is what it actually is.
@@ -39,62 +41,67 @@ can vote on it."
 
 ---
 
-## The one thing you can't compress
+## Start the email domain in week 1
 
-Email domain warming. `mg.rosavote.org` doesn't exist yet and has no sending
-reputation. A brand new domain that sends a few thousand first-contact emails
-in one burst gets filtered, and a filtered election is a failed election.
+`mg.rosavote.org` doesn't exist yet, and new domains have no reputation with
+Gmail or Outlook. Send a few thousand cold emails on day one and a chunk of
+them land in spam. Members who never see the ballot link don't vote.
 
-Two weeks of graduated volume is the floor. That constraint sets the earliest
-possible pilot date no matter how fast everything else moves. Start it in
-week 1 of either track, before anything else is ready, because it runs in the
-background while other work happens.
-
----
-
-## Fast track: pilot in five weeks
-
-Take this if a chapter has a real election on the calendar and wants to use
-RosaVote for it.
-
-**What you get.** One low-stakes chapter election, set up by hand, email
-delivery only, results published with a verifiable chain.
-
-**What you accept.** No independent security review. No second operator, so
-the author is a single point of failure for the whole election. No staging
-environment, so changes go straight to the system running the vote. Rate
-limiting is whatever the platform gives you.
-
-**Week 1.** Revoke the public demo root token. Isolate demo data from
-anything real. Stand up `mg.rosavote.org` with SPF and DKIM and begin warming
-immediately. Open the data-governance conversation with the chapter.
-
-**Week 2.** Provisioning runbook written down as you do it. CSV roll import
-rehearsed with the chapter's actual export format. Scheduler and budget alerts
-restored. Warming continues.
-
-**Week 3.** Full dress rehearsal: fake chapter, real emails to real inboxes,
-real window, real close, real publish, real verification. Load test at the
-chapter's roster size. Warming continues and you now have two weeks of
-reputation data.
-
-**Week 4.** Fix everything the rehearsal broke. Re-run the parts that failed.
-Freeze changes at the end of this week.
-
-**Week 5.** Run the election. Nothing ships during the voting window.
-
-**Go/no-go before week 5.** All P0 items closed. Dress rehearsal passed end to
-end without a manual intervention. Bounce rate under 2% and no spam-folder
-placement in seed tests. Data agreement signed. If any of those is false, the
-pilot slips a week. That is the whole point of having a gate.
+So the sending domain sets the pilot date, not the code. Give it two weeks of
+ramping volume. Set it up in week 1 and let it warm while everything else gets
+built.
 
 ---
 
-## Methodical track: twelve weeks
+## Work versus wait
 
-Take this if there's no election forcing the date. It ends somewhere the fast
-track doesn't: with a second trained operator, a security review, and a
-documented path for chapters three and four.
+The build is nearly done. What's left is mostly other people's calendars, and
+conflating the two is how roadmaps end up dishonest.
+
+**Engineering left, roughly three or four days total:** revoke the demo token
+(one command), isolate demo data, stand up the Mailgun domain and wire the
+secret, restore the scheduler and budget alerts, intake form, provisioning
+runbook, CSV import rehearsal, edge rate limiting, load test, SMS fallback,
+dress rehearsal. The rate limiting is the fiddliest item because
+`app.rosavote.org` is DNS-only for the Cloud Run certificate, so Cloudflare's
+WAF isn't in front of it and that has to be restructured.
+
+**Calendar you don't control:**
+
+| Waiting on | How long | Can you compress it |
+|---|---|---|
+| Email domain warming | 2 weeks | No |
+| A chapter's own election date | Whatever it is | No |
+| Independent security review | 2 to 4 weeks | Only by starting early |
+| Data agreement signed | Depends who signs | Somewhat |
+| Second operator trained and available | A few sessions | Somewhat |
+
+So the earliest responsible pilot is about four weeks out, and warming is the
+only reason it isn't two. Twelve weeks isn't how long the work takes. It's how
+long until the single-operator risk is gone and someone outside the project
+has tried to break it.
+
+---
+
+## If a chapter has an election coming up sooner
+
+Run it on OpaVote. It works today, it's proven, and it costs a few hundred
+dollars. Use RosaVote for the cycle after, once the pilot has shaken the bugs
+out on a vote with less riding on it.
+
+That's not modesty. Nobody outside the project has tried to break the admin
+surface, one person holds every credential, and there's no staging, so any fix
+during an election gets made on the system running it. For a bylaws vote
+that's survivable. For a contested officer race or a delegate election, it
+isn't.
+
+---
+
+## The twelve weeks
+
+Phases overlap. Weeks are wall-clock, not effort. Start Phase 1 on day one
+regardless of what else is unfinished, because the warming clock is the long
+pole.
 
 ### Phase 0. Lock down (week 1)
 
@@ -156,8 +163,7 @@ written retro.
 
 ### Phase 5. Remove the single point of failure (weeks 9 to 11)
 
-This is the phase the fast track skips, and it's the one that decides whether
-RosaVote is a project or a person's side project.
+This is the difference between a project and one person's side project.
 
 - Second operator trained on the runbook, with their own scoped credentials
 - Independent security review or penetration test, scoped to the admin surface
@@ -196,14 +202,14 @@ Out of scope for both tracks until Phase 6, deliberately:
 
 ## Risks worth stating plainly
 
-**Deliverability, not code, is the likeliest failure.** See the warming
-section. This is the risk most likely to actually sink a real election, and
-it's the one that looks least like an engineering problem.
+**Deliverability, not code, is the likeliest failure.** See the section on
+starting the email domain in week 1. It's the most likely way a real election goes wrong, and
+it looks the least like an engineering problem, so it gets skipped.
 
 **Single operator.** One person holds the admin credentials, the cloud
 account, and the knowledge. If that person is unavailable mid-election there's
-no continuity plan. The fast track accepts this risk. The methodical track
-exists largely to retire it.
+no continuity plan. Phase 5 exists to retire this, and it's the main reason
+the schedule runs twelve weeks instead of four.
 
 **Personal infrastructure holding member data.** Production runs in a personal
 GCP project. A chapter's roster would live there under one person's control.
