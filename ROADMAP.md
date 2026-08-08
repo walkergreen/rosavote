@@ -1,7 +1,8 @@
 # RosaVote roadmap
 
-**Goal: run one real, binding chapter election on RosaVote within four weeks.**
-One pilot chapter, set up by hand.
+Two tracks to the same place. The fast track runs one pilot chapter election
+in about five weeks. The methodical track takes twelve and ends with a system
+someone other than the author can operate.
 
 This file is the honest status of the project. It's specific about what isn't
 built, because the most common question about RosaVote is what it actually is.
@@ -38,120 +39,177 @@ can vote on it."
 
 ---
 
-## Scope for the next four weeks
+## The one thing you can't compress
 
-In scope: one pilot chapter election, run concierge. The chapter supplies a
-membership CSV, the election is configured by hand, codes go out by email,
-results publish with a verifiable chain.
+Email domain warming. `mg.rosavote.org` doesn't exist yet and has no sending
+reputation. A brand new domain that sends a few thousand first-contact emails
+in one burst gets filtered, and a filtered election is a failed election.
 
-Out of scope, deliberately:
+Two weeks of graduated volume is the floor. That constraint sets the earliest
+possible pilot date no matter how fast everything else moves. Start it in
+week 1 of either track, before anything else is ready, because it runs in the
+background while other work happens.
+
+---
+
+## Fast track: pilot in five weeks
+
+Take this if a chapter has a real election on the calendar and wants to use
+RosaVote for it.
+
+**What you get.** One low-stakes chapter election, set up by hand, email
+delivery only, results published with a verifiable chain.
+
+**What you accept.** No independent security review. No second operator, so
+the author is a single point of failure for the whole election. No staging
+environment, so changes go straight to the system running the vote. Rate
+limiting is whatever the platform gives you.
+
+**Week 1.** Revoke the public demo root token. Isolate demo data from
+anything real. Stand up `mg.rosavote.org` with SPF and DKIM and begin warming
+immediately. Open the data-governance conversation with the chapter.
+
+**Week 2.** Provisioning runbook written down as you do it. CSV roll import
+rehearsed with the chapter's actual export format. Scheduler and budget alerts
+restored. Warming continues.
+
+**Week 3.** Full dress rehearsal: fake chapter, real emails to real inboxes,
+real window, real close, real publish, real verification. Load test at the
+chapter's roster size. Warming continues and you now have two weeks of
+reputation data.
+
+**Week 4.** Fix everything the rehearsal broke. Re-run the parts that failed.
+Freeze changes at the end of this week.
+
+**Week 5.** Run the election. Nothing ships during the voting window.
+
+**Go/no-go before week 5.** All P0 items closed. Dress rehearsal passed end to
+end without a manual intervention. Bounce rate under 2% and no spam-folder
+placement in seed tests. Data agreement signed. If any of those is false, the
+pilot slips a week. That is the whole point of having a gate.
+
+---
+
+## Methodical track: twelve weeks
+
+Take this if there's no election forcing the date. It ends somewhere the fast
+track doesn't: with a second trained operator, a security review, and a
+documented path for chapters three and four.
+
+### Phase 0. Lock down (week 1)
+
+The instance is publicly reachable and currently has a public admin path.
+Nothing else matters until that's closed.
+
+- Revoke the demo national-root token (`tools/set_demo_admin.py --role chapter
+  --polls demo_sandbox --write`)
+- Confirm the demo token reaches the sandbox poll and nothing else
+- Decide whether the NPC replay archive stays on the public instance
+- Enable Cloud Scheduler API, restore the close-out job, restore budget alerts
+
+**Exit:** no public path to national admin. Demo data provably separated from
+anything that could become real.
+
+### Phase 1. Make it send (weeks 1 to 3, overlaps Phase 0)
+
+- Mailgun or SES sending domain `mg.rosavote.org`, SPF and DKIM in Cloudflare
+- Credential in Secret Manager, wired via `--set-secrets`, never env vars
+- Twilio for SMS fallback
+- Begin graduated warming on day one and log deliverability daily
+
+**Exit:** two weeks of warming behind you, bounce under 2%, complaint rate
+under 0.1%, seed tests landing in inbox across Gmail, Outlook, Yahoo, and at
+least one .edu.
+
+### Phase 2. Make it operable (weeks 3 to 5)
+
+- Intake form: chapter, election type, dates, roster size, contact
+- Written provisioning runbook, precise enough that a stranger could follow it
+- CSV and GCS roll import rehearsed with a real chapter export
+- Retention and deletion procedure, written and tested
+
+**Exit:** you can set up an election by following the runbook instead of
+remembering how. Someone reads it and finds no gaps.
+
+### Phase 3. Prove it (weeks 5 to 7)
+
+- Edge rate limiting on `/admin` and the vote endpoints. Note the constraint:
+  `app.rosavote.org` is DNS-only because Cloud Run issues its own certificate,
+  so Cloudflare's WAF isn't in front of it. Either move to a load balancer with
+  Cloud Armor or restructure the edge.
+- Load test at realistic roster size with `tools/load_test.py`
+- Full dress rehearsal, end to end, with real delivery
+- Fix rehearsal defects and re-run
+
+**Exit:** a complete fake election with zero manual interventions, and a
+published result that verifies from the public chain.
+
+### Phase 4. Pilot (weeks 7 to 9)
+
+- One low-stakes real election. Bylaws vote or a small officer race.
+- Change freeze during the voting window
+- Post-election review written down: what broke, what was confusing, what the
+  chapter asked for
+
+**Exit:** a certified result the chapter accepts, a chain that verifies, and a
+written retro.
+
+### Phase 5. Remove the single point of failure (weeks 9 to 11)
+
+This is the phase the fast track skips, and it's the one that decides whether
+RosaVote is a project or a person's side project.
+
+- Second operator trained on the runbook, with their own scoped credentials
+- Independent security review or penetration test, scoped to the admin surface
+  and the code path
+- Human screen-reader pass (VoiceOver, NVDA, TalkBack) before any
+  accessibility claim
+- Staging environment on its own Firestore database
+- Continuity plan: who runs the election if the author is unavailable
+
+**Exit:** someone other than the author runs a full election on staging,
+solo, from the runbook.
+
+### Phase 6. Open the door (weeks 11 to 13)
+
+- Onboard chapters two and three with less hand-holding, measure where they
+  get stuck
+- Publish the security review results, including anything unresolved
+- Self-service signup, if and only if the concierge process is boring by now
+
+**Exit:** a chapter onboards without the author writing custom instructions.
+
+---
+
+## Scope discipline
+
+Out of scope for both tracks until Phase 6, deliberately:
 
 | Deferred | Why | What happens instead |
 |---|---|---|
 | Self-service signup | Real product surface, not needed to prove the system | Set up by hand via support@ |
 | Warehouse roll import | The service account has no BigQuery role by design | CSV / GCS import |
-| Independent penetration test | Can't procure and remediate one in four weeks | Say plainly that none has been done |
+| Multi-org tenancy | Two chapters don't need it | Single operator, per-poll scoping |
 | WCAG conformance *claim* | Needs a human screen-reader pass | Do the pass, describe it, don't certify |
-| Multi-org tenancy | One pilot doesn't need it | Single operator, per-poll scoping |
-
----
-
-## P0: blockers before any real ballot exists
-
-None of these are optional.
-
-- [ ] **Revoke the public demo national-root token.** `DEMO-ADMIN-TOKEN-2026`
-      is printed on the console sign-in page and currently resolves to
-      `role: national, polls: (all)`. That's full admin over every poll on the
-      instance, including the NPC replay archive. Anyone on the internet can
-      open the console and delete or edit an election.
-      Fix: `tools/set_demo_admin.py --role chapter --polls demo_sandbox --write`
-- [ ] **Isolate demo data from real elections.** Once the demo token is
-      chapter-scoped, confirm the sandbox is the only poll it reaches. Decide
-      whether the NPC replay stays on the public instance at all.
-- [ ] **Stand up email delivery.** Mailgun or SES sending domain
-      `mg.rosavote.org`, SPF and DKIM in Cloudflare, credential in Secret
-      Manager, wired through `--set-secrets`. Until this exists, zero codes go
-      out.
-- [ ] **Warm the sending domain.** A cold domain sending a few thousand
-      first-contact emails is the likeliest way a real election fails. Send
-      graduated volume for at least two weeks before the pilot and watch
-      bounce and complaint rates.
-- [ ] **Settle data governance in writing.** Production runs in a personal GCP
-      project. A chapter's roster (names, emails, phones) would live there
-      under one person's control. Before real member data lands: who is
-      controller, who is processor, retention and deletion, breach
-      notification, and what the chapter is agreeing to. This gates the pilot
-      and it isn't a technical problem.
-
-## P1: required for a credible pilot
-
-- [ ] **Intake path.** A request form (chapter, election type, dates, roster
-      size) and a written provisioning runbook, so setup is repeatable instead
-      of improvised.
-- [ ] **CSV roll import rehearsal.** The BigQuery path is dead by design.
-      Prove the CSV/GCS path start to finish, from a chapter's export through
-      code minting to the distribution manifest.
-- [ ] **Restore scheduled close-out.** The Cloud Scheduler API isn't even
-      enabled on the project. The auto-finalize job didn't survive the
-      migration, so close-out is manual right now.
-- [ ] **Budget alerts.** Re-create the spend alerting that existed before the
-      migration.
-- [ ] **Rate limiting at the edge.** `/admin` and the vote endpoints need L7
-      limits. Constraint worth knowing: `app.rosavote.org` is DNS-only
-      (grey-cloud) because Cloud Run issues its own certificate, so
-      Cloudflare's WAF is not in front of it today. Either move to a load
-      balancer with Cloud Armor, or restructure the edge.
-- [ ] **Full dress rehearsal.** Fake chapter, real email delivery to real
-      inboxes, real voting window, real close, real publish, real
-      verification. Before a member ever votes for real.
-- [ ] **Load test at chapter scale.** `tools/load_test.py` exists. Run it
-      against production sizing.
-- [ ] **SMS fallback** (Twilio) for members with no email on file.
-
-## P2: after the pilot
-
-- [ ] Self-service signup and multi-tenant onboarding
-- [ ] Independent security review
-- [ ] Human screen-reader pass (VoiceOver, NVDA, TalkBack)
-- [ ] Staging environment on the new project
-- [ ] Operator runbook, so someone other than the author can run an election
-
----
-
-## Four-week plan
-
-**Week 1. Make it safe, make it send.** Revoke demo root. Isolate demo data.
-Stand up the Mailgun domain with SPF and DKIM and start warming it. Open the
-data-governance conversation with the pilot chapter.
-
-**Week 2. Make it operable.** Intake form and provisioning runbook. CSV roll
-import rehearsed end to end. Scheduler and budget alerts restored. SMS
-fallback configured.
-
-**Week 3. Make it survive contact.** Edge rate limiting. Load test. Full dress
-rehearsal with real delivery. Fix whatever the rehearsal breaks.
-
-**Week 4. Pilot, with slack.** Run one real chapter election. Hold the back
-half of the week as buffer. If Week 3 turns up something structural, the pilot
-slips instead of shipping broken.
 
 ---
 
 ## Risks worth stating plainly
 
-**Deliverability, not code, is the likeliest failure.** A brand new sending
-domain plus a one-time bulk send to members who've never gotten mail from it
-is a spam-filter magnet. Warming is the fix and it costs calendar time you
-can't compress.
+**Deliverability, not code, is the likeliest failure.** See the warming
+section. This is the risk most likely to actually sink a real election, and
+it's the one that looks least like an engineering problem.
 
 **Single operator.** One person holds the admin credentials, the cloud
 account, and the knowledge. If that person is unavailable mid-election there's
-no continuity plan. A second trained operator is worth more than any feature
-on this list.
+no continuity plan. The fast track accepts this risk. The methodical track
+exists largely to retire it.
 
-**Personal infrastructure holding member data.** See P0. Technically fine,
-organizationally it needs an agreement before real rosters land.
+**Personal infrastructure holding member data.** Production runs in a personal
+GCP project. A chapter's roster would live there under one person's control.
+Before real rosters land: who is controller, who is processor, retention,
+deletion, breach notification. This isn't a technical problem and it gates
+either track.
 
 **No independent security review.** The code is open and tested. Nobody
 outside the project has tried to break it. Say that instead of implying
@@ -160,3 +218,17 @@ otherwise.
 **The first binding election is the riskiest one.** Pick a low-stakes contest
 for the pilot. A bylaws vote or a small officer race, not a contested
 convention delegation.
+
+---
+
+## When to stop and reconsider
+
+Abort criteria, decided in advance so they're not argued about under pressure:
+
+- Warming plateaus with bounce over 5% or any spam-folder placement in seed
+  tests. Fix deliverability or run the pilot on a different sending domain.
+- The dress rehearsal needs a manual intervention to complete. Not ready.
+- No data agreement by the end of Phase 2. Don't accept a real roster without
+  one.
+- A member can't complete a ballot in the accessibility pass. Fix before pilot,
+  not after.
